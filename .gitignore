@@ -1,0 +1,13 @@
+# IDE-specific files
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+
+# Dependency directories
+node_modules/
+
+# Temporary files and logs
+*.log
+snapshots/
