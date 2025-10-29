@@ -1,3 +1,5 @@
+const sleep = require('node:timers/promises').setTimeout;
+
 class ActionExecutor {
   constructor(logger) {
     this.log = logger;
@@ -11,7 +13,7 @@ class ActionExecutor {
       switch (action.type) {
         case 'Delay':
           const delay = parseInt(action.value, 10) || 1000;
-          await new Promise(resolve => setTimeout(resolve, delay));
+          await sleep(delay);
           break;
 
         case 'Adjust Styling':
@@ -122,7 +124,7 @@ class ActionExecutor {
             }, action.value);
 
             // Wait for scroll to complete
-            await page.waitForTimeout(1500);
+            await sleep(1500);
           }
 
           // Try multiple click methods for better reliability
@@ -167,7 +169,7 @@ class ActionExecutor {
           }
 
           // Wait a bit after click to let any resulting actions complete
-          await page.waitForTimeout(500);
+          await sleep(500);
           break;
 
         case 'Hover Selector':
@@ -177,39 +179,26 @@ class ActionExecutor {
           break;
 
         case 'Scroll Into View':
-          if (!action.value) throw new Error('Selector required for Scroll Into View');
+          if (!action.value) throw new Error(`Selector required for ${action.type}`);
 
-          // First ensure the element exists
-          await page.waitForSelector(action.value, { timeout: 5000 });
+          // ✅ Increased timeout from 10s to 20s
+          await page.waitForSelector(action.value, { timeout: 20000 });
 
-          // Simple scroll into view
-          await page.evaluate(selector => {
-            const element = document.querySelector(selector);
-            if (element) {
-              element.scrollIntoView({
-                behavior: 'smooth',
-                block: 'nearest',
-                inline: 'nearest'
-              });
-            }
-          }, action.value);
+          if (action.type === 'Click Selector') {
+            this.log(`Clicking on selector: ${action.value}`);
+            await page.click(action.value);
+          } else if (action.type === 'Hover Selector') {
+            this.log(`Hovering over selector: ${action.value}`);
+            await page.hover(action.value);
+          } else if (action.type === 'Scroll Into View') {
+            this.log(`Scrolling into view: ${action.value}`);
+            await page.evaluate((sel) => {
+              const element = document.querySelector(sel);
+              if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, action.value);
+          }
 
-          // Wait for scroll to complete
-          await page.waitForTimeout(1500);
-
-          // **FIXED: Store scroll position by viewport type**
-          const scrollPosition = await page.evaluate(() => ({
-            scrollY: window.scrollY,
-            scrollX: window.scrollX,
-            scrollHeight: document.documentElement.scrollHeight,
-            viewportHeight: window.innerHeight,
-            timestamp: Date.now()
-          }));
-
-          // Store position for this specific viewport
-          this.scrollPositions[viewportType] = scrollPosition;
-
-          this.log(`Scroll Into View completed for ${viewportType}. Stored position: ${scrollPosition.scrollY}px (total height: ${scrollPosition.scrollHeight}px)`);
+          await sleep(action.type === 'Click Selector' ? 1000 : 500);
           break;
 
         case 'Scroll Horizontally':
@@ -217,7 +206,7 @@ class ActionExecutor {
           await page.evaluate(amount => {
             window.scrollBy(amount, 0);
           }, scrollAmount);
-          await page.waitForTimeout(500);
+          await sleep(500);
 
           // Store horizontal scroll position by viewport type
           const horizontalScrollPosition = await page.evaluate(() => ({
@@ -230,6 +219,125 @@ class ActionExecutor {
 
           this.scrollPositions[viewportType] = horizontalScrollPosition;
           this.log(`Horizontal scroll completed for ${viewportType}. Position: (${horizontalScrollPosition.scrollX}, ${horizontalScrollPosition.scrollY})`);
+          break;
+
+        case 'Debug Element Styles':
+          if (!action.value) throw new Error('Selector required for Debug Element Styles');
+
+          const debugInfo = await page.evaluate(selector => {
+            const element = document.querySelector(selector);
+            if (!element) {
+              return { error: `Element not found: ${selector}` };
+            }
+
+            const rect = element.getBoundingClientRect();
+            const computed = window.getComputedStyle(element);
+
+            return {
+              selector: selector,
+              exists: true,
+              // Position & Size
+              position: {
+                top: rect.top,
+                left: rect.left,
+                bottom: rect.bottom,
+                right: rect.right,
+                width: rect.width,
+                height: rect.height
+              },
+              // Offset values
+              offset: {
+                offsetWidth: element.offsetWidth,
+                offsetHeight: element.offsetHeight,
+                offsetTop: element.offsetTop,
+                offsetLeft: element.offsetLeft
+              },
+              // Scroll values
+              scroll: {
+                scrollWidth: element.scrollWidth,
+                scrollHeight: element.scrollHeight,
+                scrollTop: element.scrollTop,
+                scrollLeft: element.scrollLeft
+              },
+              // Computed styles (most important for layout)
+              styles: {
+                display: computed.display,
+                position: computed.position,
+                width: computed.width,
+                height: computed.height,
+                maxWidth: computed.maxWidth,
+                maxHeight: computed.maxHeight,
+                margin: computed.margin,
+                padding: computed.padding,
+                transform: computed.transform,
+                opacity: computed.opacity,
+                visibility: computed.visibility,
+                overflow: computed.overflow,
+                overflowX: computed.overflowX,
+                overflowY: computed.overflowY,
+                float: computed.float,
+                clear: computed.clear,
+                zIndex: computed.zIndex,
+                boxSizing: computed.boxSizing
+              },
+              // Viewport context
+              viewport: {
+                innerWidth: window.innerWidth,
+                innerHeight: window.innerHeight,
+                scrollY: window.scrollY,
+                scrollX: window.scrollX
+              },
+              // Parent info
+              parent: element.parentElement ? {
+                tagName: element.parentElement.tagName,
+                width: element.parentElement.offsetWidth,
+                height: element.parentElement.offsetHeight,
+                display: window.getComputedStyle(element.parentElement).display
+              } : null
+            };
+          }, action.value);
+
+          // Log to console AND save to file
+          this.log(`🔍 DEBUG ELEMENT STYLES:`);
+          this.log(JSON.stringify(debugInfo, null, 2));
+
+          // Save to file
+          const fs = require('fs');
+          const path = require('path');
+          const debugFilename = `debug-${action.value.replace(/[^a-z0-9]/gi, '_')}-${Date.now()}.json`;
+          const debugPath = path.join(__dirname, '..', 'snapshots', debugFilename);
+          fs.writeFileSync(debugPath, JSON.stringify(debugInfo, null, 2));
+          this.log(`💾 Debug info saved to: ${debugFilename}`);
+
+          break;
+
+        case 'Inject CSS':
+          if (!action.value) throw new Error('CSS code required for Inject CSS');
+
+          await page.evaluate((cssCode) => {
+            // Create style element
+            const styleElement = document.createElement('style');
+            styleElement.type = 'text/css';
+            styleElement.textContent = cssCode;
+
+            // Add to end of document
+            if (document.body) {
+              document.body.appendChild(styleElement);
+            } else {
+              // Fallback: add to head if body doesn't exist yet
+              document.head.appendChild(styleElement);
+            }
+
+            // Force reflow to apply styles immediately
+            document.body.offsetHeight;
+
+            console.log('✅ Custom CSS injected');
+          }, action.value);
+
+          this.log(`Injected custom CSS (${action.value.length} characters)`);
+
+          // Wait a bit for styles to apply
+          await sleep(200);
           break;
 
         default:
@@ -322,7 +430,7 @@ class ActionExecutor {
         window.scrollTo(pos.scrollX, pos.scrollY);
       }, { scrollX: targetScrollX, scrollY: targetScrollY });
 
-      await page.waitForTimeout(1000);
+      await sleep(1000);
 
       // Verify restoration
       const restoredPos = await page.evaluate(() => ({

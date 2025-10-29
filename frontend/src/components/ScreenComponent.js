@@ -55,9 +55,19 @@ const ScreenComponent = React.memo(({
     (screen.mobileActions?.length || 0) +
     (screen.sharedActions?.length || 0);
 
-  const getHostname = (url) => {
+  const getHostname = (url, baseUrl) => {
     try {
-      return new URL(url).hostname;
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        return new URL(url).hostname;
+      }
+
+      if (baseUrl) {
+        const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+        const cleanUrl = url.startsWith('/') ? url : '/' + url;
+        return new URL(cleanBaseUrl + cleanUrl).hostname;
+      }
+
+      return url || 'No URL';
     } catch {
       return 'Invalid URL';
     }
@@ -72,7 +82,6 @@ const ScreenComponent = React.memo(({
         onClick={toggleExpanded}
       >
         <div className="screen-header-left">
-          {/* Drag Handle */}
           <div
             className="drag-handle screen-drag-handle"
             {...dragHandleProps}
@@ -98,9 +107,32 @@ const ScreenComponent = React.memo(({
         </div>
         <div className="screen-header-right">
           <div className="screen-badges">
-                        <span className={`badge ${screen.screenshotType === 'Screenshot of Selector' ? 'selector-badge' : 'screenshot-type-badge'}`}>
-                            {screen.screenshotType === 'Screenshot of Selector' ? '🎯 Selector' : screen.screenshotType || 'Full Page'}
-                        </span>
+            <span className={`badge ${screen.screenshotType === 'Screenshot of Selector' ? 'selector-badge' : 'screenshot-type-badge'}`}>
+              {screen.screenshotType === 'Screenshot of Selector' ? '🎯 Selector' : screen.screenshotType || 'Full Page'}
+            </span>
+
+            {/* ✅ NEW: Viewport badges */}
+            {screen.enableDesktop !== false && screen.enableMobile !== false && (
+              <span className="badge viewport-badge" title="Desktop & Mobile enabled">
+                🖥️📱
+              </span>
+            )}
+            {screen.enableDesktop !== false && screen.enableMobile === false && (
+              <span className="badge viewport-badge desktop-only" title="Desktop only">
+                🖥️ Only
+              </span>
+            )}
+            {screen.enableDesktop === false && screen.enableMobile !== false && (
+              <span className="badge viewport-badge mobile-only" title="Mobile only">
+                📱 Only
+              </span>
+            )}
+            {screen.enableDesktop === false && screen.enableMobile === false && (
+              <span className="badge viewport-badge disabled" title="Both disabled - will skip">
+                ⚠️ Skip
+              </span>
+            )}
+
             <span className="badge actions-badge">{totalActions}</span>
           </div>
           <div className="screen-action-buttons">
@@ -122,7 +154,12 @@ const ScreenComponent = React.memo(({
               }}
               className="screen-action-button run-button"
               title="Run snapshot for this screen"
-              disabled={isRunning || !screen.url || (screen.screenshotType === 'Screenshot of Selector' && !screen.selectorToScreenshot)}
+              disabled={
+                isRunning ||
+                !screen.url ||
+                (screen.screenshotType === 'Screenshot of Selector' && !screen.selectorToScreenshot) ||
+                (screen.enableDesktop === false && screen.enableMobile === false)
+              }
             >
               📸
             </button>
@@ -186,6 +223,47 @@ const ScreenComponent = React.memo(({
               </div>
             </div>
 
+            {/* ✅ NEW: Viewport Enable/Disable Row */}
+            <div className="screen-config-row" style={{ marginTop: '10px' }}>
+              <div className="form-group checkbox-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={screen.enableDesktop !== false}
+                    onChange={e => updateScreen('enableDesktop', e.target.checked)}
+                  />
+                  {' '}🖥️ Enable Desktop Screenshot
+                </label>
+              </div>
+              <div className="form-group checkbox-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={screen.enableMobile !== false}
+                    onChange={e => updateScreen('enableMobile', e.target.checked)}
+                  />
+                  {' '}📱 Enable Mobile Screenshot
+                </label>
+              </div>
+
+              {/* ✅ Warning if both disabled */}
+              {screen.enableDesktop === false && screen.enableMobile === false && (
+                <div style={{
+                  gridColumn: '1 / -1',
+                  padding: '10px 15px',
+                  background: 'rgba(231, 76, 60, 0.1)',
+                  borderLeft: '3px solid #e74c3c',
+                  borderRadius: '4px',
+                  fontSize: '0.9em',
+                  color: '#e74c3c',
+                  marginTop: '10px'
+                }}>
+                  ⚠️ Warning: Both viewports are disabled. This screen will be skipped.
+                </div>
+              )}
+            </div>
+
+            {/* ✅ Screenshot of Selector with crop settings */}
             {screen.screenshotType === 'Screenshot of Selector' && (
               <div className="selector-config">
                 <div className="selector-config-header">
@@ -223,7 +301,110 @@ const ScreenComponent = React.memo(({
                       + Add height, - Reduce height
                     </div>
                   </div>
+
+                  {/* ✅ Crop Checkbox */}
+                  <div className="form-group checkbox-group" style={{marginTop: '15px'}}>
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={screen.enableCrop || false}
+                        onChange={e => updateScreen('enableCrop', e.target.checked)}
+                      />
+                      {' '}✂️ Crop after screenshot
+                    </label>
+                  </div>
                 </div>
+
+                {/* ✅ Show crop settings only if enabled */}
+                {screen.enableCrop && (
+                  <>
+                    {/* Desktop Crop Settings */}
+                    <div className="crop-settings">
+                      <h4>🖥️ Desktop Crop (pixels from each edge)</h4>
+                      <div className="crop-grid">
+                        <div className="form-group">
+                          <label>Left</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={screen.desktopCropLeft || 0}
+                            onChange={(e) => updateScreen('desktopCropLeft', parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Right</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={screen.desktopCropRight || 0}
+                            onChange={(e) => updateScreen('desktopCropRight', parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Top</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={screen.desktopCropTop || 0}
+                            onChange={(e) => updateScreen('desktopCropTop', parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Bottom</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={screen.desktopCropBottom || 0}
+                            onChange={(e) => updateScreen('desktopCropBottom', parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Mobile Crop Settings */}
+                    <div className="crop-settings">
+                      <h4>📱 Mobile Crop (pixels from each edge)</h4>
+                      <div className="crop-grid">
+                        <div className="form-group">
+                          <label>Left</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={screen.mobileCropLeft || 0}
+                            onChange={(e) => updateScreen('mobileCropLeft', parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Right</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={screen.mobileCropRight || 0}
+                            onChange={(e) => updateScreen('mobileCropRight', parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Top</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={screen.mobileCropTop || 0}
+                            onChange={(e) => updateScreen('mobileCropTop', parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Bottom</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={screen.mobileCropBottom || 0}
+                            onChange={(e) => updateScreen('mobileCropBottom', parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 

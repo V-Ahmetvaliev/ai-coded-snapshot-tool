@@ -137,66 +137,97 @@ app.post('/api/run-snapshot-debug', async (req, res) => {
 
 app.post('/api/run-screen-snapshot', async (req, res) => {
   try {
-    const { config, screenId } = req.body;
+    const { screen, config, screenIndex } = req.body;
 
-    if (!config || !screenId) {
-      return res.status(400).json({ error: 'Configuration and screen ID required' });
+    if (!screen || !config) {
+      return res.status(400).json({ error: 'Missing screen or config data' });
     }
 
-    const screen = config.screens.find(s => s.id === screenId);
-    if (!screen) {
-      return res.status(400).json({ error: 'Screen not found' });
+    // ✅ Use provided screenIndex, or find it
+    let actualIndex = screenIndex;
+
+    if (actualIndex === undefined || actualIndex === null) {
+      const foundIndex = config.screens.findIndex((s) => s.id === screen.id);
+      actualIndex = foundIndex !== -1 ? foundIndex + 1 : 1;
     }
 
-    const singleScreenConfig = { ...config, screens: [screen] };
-    const result = await runSnapshot(singleScreenConfig, null, false);
+    const totalScreens = config.screens.length;
+    const paddingLength = totalScreens.toString().length;
+
+    // ✅ Add index information DIRECTLY to the screen object
+    const screenWithIndex = {
+      ...screen,
+      screenIndex: actualIndex,
+      paddingLength: paddingLength
+    };
+
+    // ✅ Create config with ONLY this screen, but keep index
+    const singleScreenConfig = {
+      ...config,
+      screens: [screenWithIndex]
+    };
+
+    const results = await runSnapshot(singleScreenConfig, null, false);
 
     res.json({
       success: true,
-      logs: result.logs,
-      screenshots: result.screenshots,
-      timestamp: new Date().toISOString()
+      logs: results.logs,
+      screenshots: results.screenshots
     });
+
   } catch (error) {
-    console.error('Individual screen snapshot failed:', error);
+    console.error('Single screenshot error:', error);
     res.status(500).json({
-      success: false,
-      error: 'Individual screen snapshot failed',
-      details: error.message,
-      timestamp: new Date().toISOString()
+      error: 'Screenshot failed',
+      message: error.message
     });
   }
 });
 
 app.post('/api/run-screen-snapshot-debug', async (req, res) => {
   try {
-    const { config, screenId } = req.body;
+    const { screen, config, screenIndex } = req.body;
 
-    if (!config || !screenId) {
-      return res.status(400).json({ error: 'Configuration and screen ID required' });
+    if (!screen || !config) {
+      return res.status(400).json({ error: 'Missing screen or config data' });
     }
 
-    const screen = config.screens.find(s => s.id === screenId);
-    if (!screen) {
-      return res.status(400).json({ error: 'Screen not found' });
+    // ✅ Use provided screenIndex, or find it
+    let actualIndex = screenIndex;
+
+    if (actualIndex === undefined || actualIndex === null) {
+      const foundIndex = config.screens.findIndex((s) => s.id === screen.id);
+      actualIndex = foundIndex !== -1 ? foundIndex + 1 : 1;
     }
 
-    const singleScreenConfig = { ...config, screens: [screen] };
-    const result = await runSnapshot(singleScreenConfig, io, true);
+    const totalScreens = config.screens.length;
+    const paddingLength = totalScreens.toString().length;
+
+    // ✅ Add index information DIRECTLY to the screen object
+    const screenWithIndex = {
+      ...screen,
+      screenIndex: actualIndex,
+      paddingLength: paddingLength
+    };
+
+    const singleScreenConfig = {
+      ...config,
+      screens: [screenWithIndex]
+    };
+
+    const results = await runSnapshot(singleScreenConfig, io, true);
 
     res.json({
       success: true,
-      logs: result.logs,
-      screenshots: result.screenshots,
-      timestamp: new Date().toISOString()
+      logs: results.logs,
+      screenshots: results.screenshots
     });
+
   } catch (error) {
-    console.error('Individual screen debug snapshot failed:', error);
+    console.error('Debug screenshot error:', error);
     res.status(500).json({
-      success: false,
-      error: 'Individual screen debug snapshot failed',
-      details: error.message,
-      timestamp: new Date().toISOString()
+      error: 'Screenshot failed',
+      message: error.message
     });
   }
 });

@@ -1,12 +1,19 @@
 const path = require('path');
 const { SCREENSHOT_SETTINGS } = require('./config/constants');
+// const fs = require("fs");
+const sleep = require('node:timers/promises').setTimeout;
 
 class ScreenshotManager {
-  constructor(logger, io, debugMode) {
-    this.log = logger;
+  constructor(log, io = null, debugMode = false, isBatchMode = false) {
+    this.log = log;
     this.io = io;
     this.debugMode = debugMode;
+    this.isBatchMode = isBatchMode;
     this.screenshots = [];
+  }
+
+  getDelayMultiplier() {
+    return this.isBatchMode ? 2.5 : 1;
   }
 
   async sendLivePreview(page, screenName, viewportType, step, screen) {
@@ -15,7 +22,6 @@ class ScreenshotManager {
     try {
       console.log(`📸 Taking preview screenshot for ${screenName} - ${step}`);
 
-      // For previews, use the current viewport settings
       const screenshot = await page.screenshot({
         encoding: 'base64',
         type: 'jpeg',
@@ -41,9 +47,14 @@ class ScreenshotManager {
   }
 
   async takeFinalScreenshot(page, screen, viewportType) {
-    await page.waitForTimeout(1000);
+    await sleep(1000);
 
-    const filename = `${screen.fileName}-${viewportType}.png`;
+    // ✅ Build numbered filename
+    const prefix = screen.screenIndex
+      ? String(screen.screenIndex).padStart(screen.paddingLength || 1, '0') + '. '
+      : '';
+
+    const filename = `${prefix}${screen.fileName} ${viewportType}.png`;
     const screenshotPath = path.join(__dirname, '..', 'snapshots', filename);
 
     try {
@@ -56,7 +67,7 @@ class ScreenshotManager {
       this.screenshots.push({
         filename,
         path: screenshotPath,
-        url: `/snapshots/${filename}`,
+        url: `/snapshots/${encodeURIComponent(filename)}`,
         screen: screen.fileName,
         viewport: viewportType,
         screenshotType: screen.screenshotType || 'Full Page'
@@ -75,10 +86,15 @@ class ScreenshotManager {
     const scrollInfo = await page.evaluate(() => ({
       scrollY: window.scrollY,
       scrollHeight: document.documentElement.scrollHeight,
-      viewportHeight: window.innerHeight
+      viewportHeight: window.innerHeight,
+      viewportWidth: window.innerWidth,
+      devicePixelRatio: window.devicePixelRatio
     }));
 
     this.log(`Taking standard screenshot at scroll position: ${scrollInfo.scrollY}px`);
+
+    const delayMultiplier = this.getDelayMultiplier();
+    await sleep(500 * delayMultiplier);
 
     await page.screenshot({
       path: screenshotPath,
@@ -92,10 +108,8 @@ class ScreenshotManager {
       throw new Error('Selector is required for Screenshot of Selector');
     }
 
-    // **STEP 1: Enable request interception to block unwanted navigation**
     await page.setRequestInterception(true);
 
-    // Block navigation requests during screenshot process
     const requestHandler = (request) => {
       if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
         this.log(`🚫 Blocking navigation to: ${request.url()}`);
@@ -107,9 +121,7 @@ class ScreenshotManager {
 
     page.on('request', requestHandler);
 
-    // **STEP 2: Prevent JavaScript-triggered navigation**
     await page.evaluate(() => {
-      // Override methods that can cause navigation
       const originalAssign = window.location.assign;
       const originalReplace = window.location.replace;
       const originalReload = window.location.reload;
@@ -126,21 +138,18 @@ class ScreenshotManager {
         console.log('Blocked location.reload');
       };
 
-      // Block form submissions
       document.addEventListener('submit', function(e) {
         console.log('Blocked form submission');
         e.preventDefault();
         e.stopPropagation();
       }, true);
 
-      // Block hash changes that might trigger navigation
       window.addEventListener('hashchange', function(e) {
         console.log('Blocked hashchange');
         e.preventDefault();
         e.stopPropagation();
       }, true);
 
-      // Store original methods for later restoration (optional)
       window.__originalLocationMethods = {
         assign: originalAssign,
         replace: originalReplace,
@@ -150,15 +159,11 @@ class ScreenshotManager {
 
     try {
       this.log(`Taking element-based screenshot for selector: ${screen.selectorToScreenshot}`);
+      const delayMultiplier = this.getDelayMultiplier();
 
-      // Wait for element to be present
       await page.waitForSelector(screen.selectorToScreenshot, { timeout: 10000 });
+      await sleep(1000);
 
-      // Extended wait for page stability
-      this.log('Waiting for page stability after blocking navigation...');
-      await page.waitForTimeout(3000);
-
-      // Get element dimensions
       const elementInfo = await page.evaluate(selector => {
         const element = document.querySelector(selector);
         if (!element) {
@@ -176,12 +181,10 @@ class ScreenshotManager {
 
       this.log(`Element dimensions: ${elementInfo.width}x${elementInfo.height}`);
 
-      // Calculate viewport with compensation
       const heightCompensation = parseInt(screen.heightCompensation || 0);
       const targetHeight = Math.max(200, Math.round(elementInfo.height + heightCompensation));
       const targetWidth = Math.max(300, Math.round(elementInfo.width));
 
-      // Store original viewport
       const originalViewport = await page.evaluate(() => ({
         width: window.innerWidth,
         height: window.innerHeight
@@ -189,17 +192,15 @@ class ScreenshotManager {
 
       this.log(`Setting viewport to ${targetWidth}x${targetHeight} (compensation: ${heightCompensation}px)`);
 
-      // Set new viewport
       await page.setViewport({
         width: targetWidth,
         height: targetHeight,
-        deviceScaleFactor: 1
+        deviceScaleFactor: 1,
+        isMobile: false
       });
 
-      // Wait for viewport change
-      await page.waitForTimeout(2000);
+      await sleep(1000 * delayMultiplier);
 
-      // Center element in new viewport
       await page.evaluate((selector, targetHeight) => {
         const element = document.querySelector(selector);
         if (!element) return;
@@ -212,10 +213,24 @@ class ScreenshotManager {
         window.scrollTo(0, window.scrollY + scrollOffset);
       }, screen.selectorToScreenshot, targetHeight);
 
-      // Final wait
-      await page.waitForTimeout(1500);
+      await sleep(1500 * delayMultiplier);
 
-      // Log final state
+      // ✅ Get element position in viewport AFTER scrolling
+      const elementPositionInViewport = await page.evaluate(selector => {
+        const element = document.querySelector(selector);
+        if (!element) {
+          return { top: 0, left: 0, width: 0, height: 0 };
+        }
+
+        const rect = element.getBoundingClientRect();
+        return {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height
+        };
+      }, screen.selectorToScreenshot);
+
       const finalScrollInfo = await page.evaluate(() => ({
         scrollY: window.scrollY,
         viewportHeight: window.innerHeight,
@@ -224,31 +239,91 @@ class ScreenshotManager {
       }));
 
       this.log(`Final state - viewport: ${finalScrollInfo.viewportWidth}x${finalScrollInfo.viewportHeight}, scroll: ${finalScrollInfo.scrollY}px`);
+      this.log(`Element position in viewport: (${elementPositionInViewport.left}, ${elementPositionInViewport.top}), size: ${elementPositionInViewport.width}x${elementPositionInViewport.height}`);
 
-      // Take screenshot
-      await page.screenshot({
-        path: screenshotPath,
-        fullPage: false,
-        type: 'png'
-      });
+      // ✅ Get crop values
+      const cropEnabled = screen.enableCrop === true;
 
-      // Send final preview
+      const cropLeft = cropEnabled && viewportType === 'desktop'
+        ? (parseInt(screen.desktopCropLeft) || 0)
+        : cropEnabled && viewportType === 'mobile'
+          ? (parseInt(screen.mobileCropLeft) || 0)
+          : 0;
+
+      const cropRight = cropEnabled && viewportType === 'desktop'
+        ? (parseInt(screen.desktopCropRight) || 0)
+        : cropEnabled && viewportType === 'mobile'
+          ? (parseInt(screen.mobileCropRight) || 0)
+          : 0;
+
+      const cropTop = cropEnabled && viewportType === 'desktop'
+        ? (parseInt(screen.desktopCropTop) || 0)
+        : cropEnabled && viewportType === 'mobile'
+          ? (parseInt(screen.mobileCropTop) || 0)
+          : 0;
+
+      const cropBottom = cropEnabled && viewportType === 'desktop'
+        ? (parseInt(screen.desktopCropBottom) || 0)
+        : cropEnabled && viewportType === 'mobile'
+          ? (parseInt(screen.mobileCropBottom) || 0)
+          : 0;
+
+      // ✅ Take screenshot with crop applied to element position
+      if (cropEnabled && (cropLeft || cropRight || cropTop || cropBottom)) {
+        // Calculate clip region: element position in viewport + crop offsets
+        const clipX = Math.max(0, elementPositionInViewport.left + cropLeft);
+        const clipY = Math.max(0, elementPositionInViewport.top + cropTop);
+        const clipWidth = Math.max(1, elementPositionInViewport.width - cropLeft - cropRight);
+        const clipHeight = Math.max(1, elementPositionInViewport.height - cropTop - cropBottom);
+
+        this.log(`[${viewportType}] Element in viewport at (${elementPositionInViewport.left}, ${elementPositionInViewport.top}), size ${elementPositionInViewport.width}x${elementPositionInViewport.height}`);
+        this.log(`[${viewportType}] Applying crop - L:${cropLeft} R:${cropRight} T:${cropTop} B:${cropBottom}`);
+        this.log(`[${viewportType}] Clip region: x=${clipX}, y=${clipY}, width=${clipWidth}, height=${clipHeight}`);
+
+        if (clipWidth > 0 && clipHeight > 0) {
+          await page.screenshot({
+            path: screenshotPath,
+            fullPage: false,
+            type: 'png',
+            clip: {
+              x: clipX,
+              y: clipY + finalScrollInfo.scrollY,
+              width: clipWidth,
+              height: clipHeight
+            }
+          });
+        } else {
+          this.log(`[${viewportType}] ⚠️ Invalid clip dimensions, taking full screenshot`);
+          await page.screenshot({
+            path: screenshotPath,
+            fullPage: false,
+            type: 'png'
+          });
+        }
+      } else {
+        // No crop - standard screenshot
+        this.log(`[${viewportType}] Taking full viewport screenshot ${targetWidth}x${targetHeight}`);
+        await page.screenshot({
+          path: screenshotPath,
+          fullPage: false,
+          type: 'png'
+        });
+      }
+
       if (this.debugMode) {
         await this.sendLivePreview(page, screen.fileName, viewportType, 'element-final-stable', screen);
       }
 
-      // Restore original viewport
       await page.setViewport({
         width: originalViewport.width,
         height: originalViewport.height,
-        deviceScaleFactor: 1
+        deviceScaleFactor: 1,
+        isMobile: false
       });
 
     } finally {
-      // **STEP 3: Clean up - remove request interception and restore navigation**
       page.off('request', requestHandler);
 
-      // Optionally restore original navigation methods
       await page.evaluate(() => {
         if (window.__originalLocationMethods) {
           window.location.assign = window.__originalLocationMethods.assign;
@@ -263,10 +338,8 @@ class ScreenshotManager {
     }
   }
 
-
-
   async triggerLazyLoadingAndAnimations(page, screenName, viewportName, screen) {
-    this.log(`[${screenName}] ${viewportName}: 🔄 Triggering lazy loading and animations...`);
+    this.log(`[${screenName}] ${viewportName}: 🔄 Triggering lazy loading with optimized scrolling...`);
 
     try {
       await this.sendLivePreview(page, screenName, viewportName, 'lazy-start', screen);
@@ -278,8 +351,41 @@ class ScreenshotManager {
 
       this.log(`[${screenName}] ${viewportName}: Initial page height: ${initialPageInfo.scrollHeight}px`);
 
+      // Disable lazy loading libraries
+      await this.disableLazyLoading(page);
+
+      // ✅ FASTER VERSION: Reduced passes and faster scrolling
       await page.evaluate(async () => {
         const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+        // Fast smooth scroll helper
+        const smoothScrollTo = async (targetY, duration = 300) => { // Reduced from 600-800ms
+          const startY = window.scrollY;
+          const distance = targetY - startY;
+          const startTime = performance.now();
+
+          return new Promise(resolve => {
+            const scroll = (currentTime) => {
+              const elapsed = currentTime - startTime;
+              const progress = Math.min(elapsed / duration, 1);
+
+              // Easing function (ease-in-out)
+              const easing = progress < 0.5
+                ? 2 * progress * progress
+                : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+              window.scrollTo(0, startY + distance * easing);
+
+              if (progress < 1) {
+                requestAnimationFrame(scroll);
+              } else {
+                resolve();
+              }
+            };
+
+            requestAnimationFrame(scroll);
+          });
+        };
 
         let totalHeight = Math.max(
           document.body.scrollHeight,
@@ -292,14 +398,23 @@ class ScreenshotManager {
         const viewportHeight = window.innerHeight;
         let currentHeight = totalHeight;
 
+        // ✅ REDUCED TO 2 PASSES ONLY (was 3)
         for (let pass = 0; pass < 2; pass++) {
-          console.log(`Pass ${pass + 1}: Scrolling through ${totalHeight}px`);
+          console.log(`Smooth scroll pass ${pass + 1}/2 through ${totalHeight}px`);
 
-          for (let position = 0; position <= totalHeight; position += viewportHeight / 4) {
-            window.scrollTo(0, Math.min(position, totalHeight));
+          // ✅ LARGER STEPS: 100% viewport instead of 80%
+          const scrollSteps = Math.ceil(totalHeight / viewportHeight);
+
+          for (let step = 0; step <= scrollSteps; step++) {
+            const targetPosition = Math.min((step * viewportHeight), totalHeight);
+
+            // ✅ FASTER: 300ms instead of 600ms
+            await smoothScrollTo(targetPosition, 300);
+
             window.dispatchEvent(new Event('scroll'));
-            window.dispatchEvent(new Event('resize'));
-            await delay(200);
+
+            // ✅ REDUCED WAIT: 150ms instead of 400ms
+            await delay(150);
 
             const newHeight = Math.max(
               document.body.scrollHeight,
@@ -310,13 +425,15 @@ class ScreenshotManager {
             );
 
             if (newHeight > totalHeight) {
+              console.log(`Page grew from ${totalHeight}px to ${newHeight}px`);
               totalHeight = newHeight;
             }
           }
 
-          window.scrollTo(0, totalHeight);
+          // Smooth scroll to bottom
+          await smoothScrollTo(totalHeight, 400); // Reduced from 800ms
           window.dispatchEvent(new Event('scroll'));
-          await delay(1000);
+          await delay(500); // Reduced from 1500ms
 
           const finalHeight = Math.max(
             document.body.scrollHeight,
@@ -329,41 +446,24 @@ class ScreenshotManager {
           if (finalHeight > currentHeight) {
             totalHeight = finalHeight;
             currentHeight = finalHeight;
+            console.log(`Height updated to ${totalHeight}px, continuing...`);
           } else {
-            break;
+            console.log(`Height stable at ${totalHeight}px, stopping early`);
+            break; // ✅ STOP EARLY if height doesn't change
           }
         }
 
-        for (let position = totalHeight; position >= 0; position -= viewportHeight / 3) {
-          window.scrollTo(0, Math.max(position, 0));
-          window.dispatchEvent(new Event('scroll'));
-          await delay(150);
-        }
-
-        window.scrollTo(0, 0);
+        // ✅ FASTER SCROLL UP: Skip smooth scroll up entirely
+        console.log('Instant scroll back to top...');
+        await smoothScrollTo(0, 800); // Reduced from 800ms
         window.dispatchEvent(new Event('scroll'));
-        await delay(500);
+        await delay(300); // Just one quick delay
       });
 
-      this.log(`[${screenName}] ${viewportName}: ⏳ Waiting for first network idle...`);
-      try {
-        await page.waitForLoadState('networkidle', { timeout: 15000 });
-        this.log(`[${screenName}] ${viewportName}: ✅ First network idle completed`);
-        await this.sendLivePreview(page, screenName, viewportName, 'network-idle-1', screen);
-      } catch (e) {
-        this.log(`[${screenName}] ${viewportName}: ⚠️ First network idle timeout`);
-      }
+      // Wait for images to load
+      await this.waitForAllImages(page, screenName, viewportName);
 
-      await page.waitForTimeout(1500);
-
-      this.log(`[${screenName}] ${viewportName}: ⏳ Waiting for second network idle...`);
-      try {
-        await page.waitForLoadState('networkidle', { timeout: 10000 });
-        this.log(`[${screenName}] ${viewportName}: ✅ Second network idle completed`);
-        await this.sendLivePreview(page, screenName, viewportName, 'network-idle-2', screen);
-      } catch (e) {
-        this.log(`[${screenName}] ${viewportName}: ⚠️ Second network idle timeout`);
-      }
+      await sleep(1000 * this.getDelayMultiplier());
 
       const finalPageInfo = await page.evaluate(() => ({
         scrollHeight: document.documentElement.scrollHeight,
@@ -373,13 +473,173 @@ class ScreenshotManager {
       if (finalPageInfo.scrollHeight > initialPageInfo.scrollHeight) {
         this.log(`[${screenName}] ${viewportName}: ✅ Lazy content loaded (${initialPageInfo.scrollHeight}px → ${finalPageInfo.scrollHeight}px)`);
       } else {
-        this.log(`[${screenName}] ${viewportName}: ✅ Page scroll completed`);
+        this.log(`[${screenName}] ${viewportName}: ✅ Page scroll completed (height: ${finalPageInfo.scrollHeight}px)`);
       }
 
     } catch (error) {
       this.log(`[${screenName}] ${viewportName}: ⚠️ Lazy loading failed: ${error.message}`);
     }
   }
+
+  // ✅ NEW: Disable lazy loading libraries
+  async disableLazyLoading(page) {
+    await page.evaluate(() => {
+      // Disable native lazy loading
+      document.querySelectorAll('img[loading="lazy"]').forEach(img => {
+        img.loading = 'eager';
+      });
+
+      // Disable lazysizes library
+      if (window.lazySizes) {
+        window.lazySizes.config.lazyClass = 'do-not-lazy-load';
+      }
+      if (window.lazySizesConfig) {
+        window.lazySizesConfig.lazyClass = 'do-not-lazy-load';
+      }
+
+      // Force load all images with common lazy load attributes
+      const lazySelectors = [
+        'img[data-src]',
+        'img[data-lazy-src]',
+        'img[data-original]',
+        'img.lazyload',
+        'img.lazy',
+        'img.b-lazy'
+      ];
+
+      lazySelectors.forEach(selector => {
+        document.querySelectorAll(selector).forEach(img => {
+          const src = img.dataset.src || img.dataset.lazySrc || img.dataset.original;
+          if (src) {
+            img.src = src;
+            img.classList.remove('lazyload', 'lazy', 'b-lazy');
+          }
+          if (img.dataset.srcset) {
+            img.srcset = img.dataset.srcset;
+          }
+        });
+      });
+    });
+  }
+
+  // ✅ NEW: Comprehensive image loading wait
+  async waitForAllImages(page, screenName, viewportName) {
+    this.log(`[${screenName}] ${viewportName}: Waiting for all images to load...`);
+
+    let attempt = 0;
+    const maxAttempts = 5;
+
+    while (attempt < maxAttempts) {
+      attempt++;
+      this.log(`[${screenName}] ${viewportName}: Image loading attempt ${attempt}/${maxAttempts}`);
+
+      const imageStats = await page.evaluate(() => {
+        const images = Array.from(document.images);
+        let loaded = 0;
+        let failed = 0;
+        let pending = 0;
+
+        images.forEach(img => {
+          if (img.complete) {
+            if (img.naturalHeight !== 0) {
+              loaded++;
+            } else {
+              failed++;
+            }
+          } else {
+            pending++;
+          }
+        });
+
+        return { total: images.length, loaded, failed, pending };
+      });
+
+      this.log(`[${screenName}] ${viewportName}: Images - Total: ${imageStats.total}, Loaded: ${imageStats.loaded}, Failed: ${imageStats.failed}, Pending: ${imageStats.pending}`);
+
+      if (imageStats.pending === 0) {
+        this.log(`[${screenName}] ${viewportName}: All images processed`);
+        break;
+      }
+
+      // Wait for pending images
+      await page.evaluate(() => {
+        return Promise.race([
+          Promise.all(
+            Array.from(document.images)
+              .filter(img => !img.complete)
+              .map(img => new Promise(resolve => {
+                img.addEventListener('load', resolve, { once: true });
+                img.addEventListener('error', resolve, { once: true });
+              }))
+          ),
+          new Promise(resolve => setTimeout(resolve, 3000))
+        ]);
+      });
+
+      await sleep(500);
+    }
+
+    // Handle background images
+    await page.evaluate(() => {
+      return Promise.all(
+        Array.from(document.querySelectorAll('*'))
+          .filter(el => {
+            const style = window.getComputedStyle(el);
+            const bg = style.backgroundImage;
+            return bg && bg !== 'none' && bg.includes('url');
+          })
+          .map(el => {
+            return new Promise(resolve => {
+              const bg = window.getComputedStyle(el).backgroundImage;
+              const matches = bg.match(/url\(['"]?(.*?)['"]?\)/g);
+
+              if (!matches) {
+                resolve();
+                return;
+              }
+
+              const urls = matches.map(match => match.match(/url\(['"]?(.*?)['"]?\)/)[1]);
+              const promises = urls
+                .filter(url => !url.startsWith('data:'))
+                .map(url => {
+                  return new Promise(innerResolve => {
+                    const img = new Image();
+                    img.onload = innerResolve;
+                    img.onerror = innerResolve;
+                    img.src = url;
+                    setTimeout(innerResolve, 3000);
+                  });
+                });
+
+              Promise.all(promises).then(resolve);
+              setTimeout(resolve, 5000);
+            });
+          })
+      );
+    });
+
+    this.log(`[${screenName}] ${viewportName}: ✅ Image loading complete`);
+    await sleep(1000);
+  }
+
+  // Can save DOM for debug
+  // async savePageDOM(page, screenName, viewportType) {
+  //   try {
+  //     const html = await page.content();
+  //     const fs = require('fs');
+  //     const path = require('path');
+  //
+  //     const filename = `${screenName}-${viewportType}-dom.html`;
+  //     const filepath = path.join(__dirname, '..', 'snapshots', filename);
+  //
+  //     fs.writeFileSync(filepath, html, 'utf-8');
+  //
+  //     this.log(`💾 DOM saved: ${filename}`);
+  //     return filepath;
+  //   } catch (error) {
+  //     this.log(`❌ Failed to save DOM: ${error.message}`);
+  //   }
+  // }
 
   getScreenshots() {
     return this.screenshots;

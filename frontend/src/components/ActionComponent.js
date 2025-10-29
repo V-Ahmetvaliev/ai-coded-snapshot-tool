@@ -12,7 +12,9 @@ const ACTION_TYPES = [
   'Click Selector',
   'Hover Selector',
   'Scroll Into View',
-  'Scroll Horizontally'
+  'Scroll Horizontally',
+  'Debug Element Styles',
+  'Inject CSS'
 ];
 
 const getPlaceholder = (actionType) => {
@@ -25,6 +27,8 @@ const getPlaceholder = (actionType) => {
     case 'Hover Selector':
     case 'Scroll Into View': return 'CSS Selector';
     case 'Scroll Horizontally': return 'Pixels (e.g., 100)';
+    case 'Debug Element Styles': return 'CSS Selector';
+    case 'Inject CSS': return 'CSS code to inject';
     default: return 'Value';
   }
 };
@@ -46,7 +50,7 @@ const SortableActionComponent = React.memo(({ action, index, updateAction, delet
   };
 
   const requiresSelector = ['Adjust Styling', 'Fill Form'].includes(action.type);
-  const isComplexAction = ['Adjust Styling', 'Execute JS'].includes(action.type);
+  const isComplexAction = ['Adjust Styling', 'Execute JS', 'Inject CSS'].includes(action.type);
 
   return (
     <div className="action-wrapper" ref={setNodeRef} style={style}>
@@ -79,7 +83,7 @@ const SortableActionComponent = React.memo(({ action, index, updateAction, delet
               />
             )}
 
-            {action.type !== 'Adjust Styling' && action.type !== 'Execute JS' && (
+            {action.type !== 'Adjust Styling' && action.type !== 'Execute JS' && action.type !== 'Inject CSS' && (
               <input
                 type="text"
                 placeholder={getPlaceholder(action.type)}
@@ -128,9 +132,25 @@ const SortableActionComponent = React.memo(({ action, index, updateAction, delet
             </div>
           </div>
         )}
+
+        {action.type === 'Inject CSS' && (
+          <div className="action-secondary-row">
+                        <textarea
+                          placeholder=".callout__circled-icon--static { display: none !important; }"
+                          value={action.value || ''}
+                          onChange={e => updateAction('value', e.target.value)}
+                          className="action-textarea css-textarea"
+                          rows={6}
+                        />
+            <div className="input-hint">
+              Enter CSS code to inject into the page
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 });
+
 
 export default SortableActionComponent;

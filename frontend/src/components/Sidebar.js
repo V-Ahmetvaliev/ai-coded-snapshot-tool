@@ -8,6 +8,7 @@ const Sidebar = ({
                    resetAll,
                    handleRunSnapshot,
                    handleRunSnapshotDebug,
+                   handleRunSnapshotSequential,
                    isRunning,
                    isDragging,
                    isProcessingFile,
@@ -72,10 +73,24 @@ const Sidebar = ({
         </div>
 
         <div className="form-group">
+          <label>Base URL (Optional)</label>
+          <input
+            type="text"
+            name="baseUrl"
+            value={config.baseUrl || ''}
+            onChange={handleConfigChange}
+            placeholder="https://example.com"
+          />
+          <div className="form-hint">
+            Base URL for relative paths. Leave empty to use full URLs in screens.
+          </div>
+        </div>
+
+        <div className="form-group">
           <label>Username (optional)</label>
           <input
-            name="usernameWithoutAutofill"
-            autoComplete="ChromePleaseNo"
+            name="username"
+            autoComplete="off"
             value={config.username}
             onChange={handleConfigChange}
             placeholder="Basic auth username"
@@ -85,9 +100,9 @@ const Sidebar = ({
         <div className="form-group">
           <label>Password (optional)</label>
           <input
-            name="passwordWithoutAutofill"
+            name="password"
             type="password"
-            autoComplete="ChromePleaseNo"
+            autoComplete="off"
             value={config.password}
             onChange={handleConfigChange}
             placeholder="Basic auth password"
@@ -166,21 +181,50 @@ const Sidebar = ({
           </div>
         </div>
 
-        <button
-          className={`button primary ${isRunning ? 'loading' : ''}`}
-          onClick={handleRunSnapshot}
-          disabled={isRunning || config.screens.length === 0}
-        >
-          {isRunning ? '🔄 Running...' : '🚀 Run Snapshot'}
-        </button>
+        <div className="config-section">
+          <h3>🚀 Run Snapshots</h3>
 
-        <button
-          className={`button secondary ${isRunning ? 'loading' : ''}`}
-          onClick={handleRunSnapshotDebug}
-          disabled={isRunning || config.screens.length === 0}
-        >
-          {isRunning ? '🔄 Running Debug...' : '🔍 Run Snapshot With Debug'}
-        </button>
+          {/* Existing Parallel Batch Buttons */}
+          <div className="button-group">
+            <button
+              onClick={handleRunSnapshot}
+              disabled={isRunning || config.screens.length === 0}
+              className="button primary"
+            >
+              📸 Run All (Parallel)
+            </button>
+            <button
+              onClick={handleRunSnapshotDebug}
+              disabled={isRunning || config.screens.length === 0}
+              className="button secondary"
+            >
+              🔍 Debug All (Parallel)
+            </button>
+          </div>
+
+          {/* ✅ NEW: Sequential Run Buttons */}
+          <div className="button-group" style={{ marginTop: '10px' }}>
+            <button
+              onClick={() => handleRunSnapshotSequential(false)}
+              disabled={isRunning || config.screens.length === 0}
+              className="button primary"
+            >
+              🔄 Run All (One by One)
+            </button>
+            <button
+              onClick={() => handleRunSnapshotSequential(true)}
+              disabled={isRunning || config.screens.length === 0}
+              className="button secondary"
+            >
+              🔍 Debug All (One by One)
+            </button>
+          </div>
+
+          <div className="run-info" style={{ marginTop: '10px', fontSize: '0.85em', color: '#95a5a6' }}>
+            <strong>Parallel:</strong> Fast, all screens at once<br/>
+            <strong>One by One:</strong> Slower, but more stable
+          </div>
+        </div>
 
         <button
           className="button secondary"

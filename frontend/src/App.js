@@ -15,11 +15,12 @@ const API_BASE = 'http://localhost:5001/api';
 const App = () => {
   const [config, setConfig] = useState({
     siteName: 'Snapshot Tool',
+    baseUrl: '',
     username: '',
     password: '',
     desktopWidth: 1920,
     desktopHeight: 1080,
-    mobileWidth: 430,
+    mobileWidth: 436,
     mobileHeight: 1080,
     enableLazyLoading: true,
     screens: []
@@ -83,6 +84,17 @@ const App = () => {
       selectorToScreenshot: '',
       heightCompensation: 0,
       fullPage: true,
+      enableDesktop: true,
+      enableMobile: true,
+      enableCrop: false,
+      desktopCropLeft: 0,
+      desktopCropRight: 0,
+      desktopCropTop: 0,
+      desktopCropBottom: 0,
+      mobileCropLeft: 0,
+      mobileCropRight: 0,
+      mobileCropTop: 0,
+      mobileCropBottom: 0,
       desktopActions: [],
       mobileActions: [],
       sharedActions: []
@@ -293,16 +305,120 @@ const App = () => {
     }
   };
 
+  // ✅ NEW: Run all screens sequentially (one by one)
+  const handleRunSnapshotSequential = async (debugMode = false) => {
+    if (config.screens.length === 0) {
+      setError('Please add at least one screen before running');
+      return;
+    }
+
+    setIsRunning(true);
+    setError('');
+    setLogs([`🚀 Starting sequential snapshot process (${config.screens.length} screens, one at a time)...`]);
+
+    if (debugMode) {
+      clearPreviews();
+      setShowPreviewWindow(true);
+    }
+
+    const failedScreens = [];
+    const successfulScreens = [];
+
+    try {
+      for (let i = 0; i < config.screens.length; i++) {
+        const screen = config.screens[i];
+        const screenNumber = i + 1;
+
+        setLogs(prev => [...prev, `\n📸 [${screenNumber}/${config.screens.length}] Processing: ${screen.fileName}...`]);
+
+        try {
+          // Find screen index for proper numbering
+          const screenIndex = config.screens.findIndex(s => s.id === screen.id) + 1;
+
+          const endpoint = debugMode ? 'run-screen-snapshot-debug' : 'run-screen-snapshot';
+
+          const response = await axios.post(`${API_BASE}/${endpoint}`, {
+            screen,
+            config,
+            screenIndex
+          }, { timeout: 300000 });
+
+          if (response.data.success) {
+            setLogs(prev => [...prev, ...response.data.logs]);
+            successfulScreens.push(screen.fileName);
+            setLogs(prev => [...prev, `✅ [${screenNumber}/${config.screens.length}] ${screen.fileName} completed`]);
+          } else {
+            failedScreens.push({ name: screen.fileName, error: 'Unknown error' });
+            setLogs(prev => [...prev, `❌ [${screenNumber}/${config.screens.length}] ${screen.fileName} failed`]);
+          }
+        } catch (error) {
+          const errorMessage = error.response?.data?.message || error.message || 'Unknown error';
+          failedScreens.push({ name: screen.fileName, error: errorMessage });
+          setLogs(prev => [...prev, `❌ [${screenNumber}/${config.screens.length}] ${screen.fileName} failed: ${errorMessage}`]);
+        }
+
+        // Small delay between screens
+        if (i < config.screens.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+
+      // Summary
+      setLogs(prev => [
+        ...prev,
+        `\n${'='.repeat(50)}`,
+        `📊 Sequential Processing Complete`,
+        `✅ Successful: ${successfulScreens.length}`,
+        `❌ Failed: ${failedScreens.length}`,
+        `${'='.repeat(50)}`
+      ]);
+
+      if (failedScreens.length > 0) {
+        setLogs(prev => [...prev, `\n⚠️ Failed Screens:`]);
+        failedScreens.forEach((failure, idx) => {
+          setLogs(prev => [...prev, `  ${idx + 1}. ${failure.name}: ${failure.error}`]);
+        });
+      }
+
+      if (failedScreens.length === 0) {
+        alert(`✅ All ${successfulScreens.length} screens completed successfully!`);
+      } else {
+        alert(`⚠️ Completed with ${successfulScreens.length} successful and ${failedScreens.length} failed screenshots`);
+      }
+
+    } catch (error) {
+      const errorMessage = error.message || 'Unknown error occurred';
+      setError(`Sequential snapshot failed: ${errorMessage}`);
+      setLogs(prev => [...prev, `❌ Fatal error: ${errorMessage}`]);
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+
   const handleRunSingleScreen = async (screenId) => {
     setIsRunning(true);
     setError('');
+
+    // ✅ Find screen first
     const screen = config.screens.find(s => s.id === screenId);
+
+    if (!screen) {
+      setError('Screen not found');
+      setIsRunning(false);
+      return;
+    }
+
+    // ✅ Find screen index
+    const screenIndex = config.screens.findIndex(s => s.id === screenId) + 1;
+
     setLogs([`🚀 Starting snapshot for screen: ${screen.fileName}...`]);
 
     try {
       const response = await axios.post(`${API_BASE}/run-screen-snapshot`, {
-        config,
-        screenId
+        screen,      // ✅ Send screen object
+        config,      // ✅ Send full config
+        screenIndex  // ✅ Send index
       }, { timeout: 300000 });
 
       if (response.data.success) {
@@ -312,7 +428,7 @@ const App = () => {
         setLogs(prev => [...prev, '❌ Single screen process failed']);
       }
     } catch (error) {
-      const errorMessage = error.response?.data?.details || error.message || 'Unknown error occurred';
+      const errorMessage = error.response?.data?.message || error.message || 'Unknown error occurred';
       setError(`Failed to run single screen snapshot: ${errorMessage}`);
       setLogs(prev => [...prev, `❌ Error: ${errorMessage}`]);
     } finally {
@@ -323,15 +439,28 @@ const App = () => {
   const handleRunSingleScreenDebug = async (screenId) => {
     setIsRunning(true);
     setError('');
+
+    // ✅ Find screen first
     const screen = config.screens.find(s => s.id === screenId);
+
+    if (!screen) {
+      setError('Screen not found');
+      setIsRunning(false);
+      return;
+    }
+
+    // ✅ Find screen index
+    const screenIndex = config.screens.findIndex(s => s.id === screenId) + 1;
+
     setLogs([`🚀 Starting debug snapshot for screen: ${screen.fileName}...`]);
     clearPreviews();
     setShowPreviewWindow(true);
 
     try {
       const response = await axios.post(`${API_BASE}/run-screen-snapshot-debug`, {
-        config,
-        screenId
+        screen,      // ✅ Send screen object
+        config,      // ✅ Send full config
+        screenIndex  // ✅ Send index
       }, { timeout: 300000 });
 
       if (response.data.success) {
@@ -341,13 +470,14 @@ const App = () => {
         setLogs(prev => [...prev, '❌ Single screen debug process failed']);
       }
     } catch (error) {
-      const errorMessage = error.response?.data?.details || error.message || 'Unknown error occurred';
+      const errorMessage = error.response?.data?.message || error.message || 'Unknown error occurred';
       setError(`Failed to run single screen debug snapshot: ${errorMessage}`);
       setLogs(prev => [...prev, `❌ Error: ${errorMessage}`]);
     } finally {
       setIsRunning(false);
     }
   };
+
 
   // File operations (unchanged)
   const handleDragOver = useCallback((e) => {
@@ -448,6 +578,7 @@ const App = () => {
     if (window.confirm('Are you sure you want to reset all configuration? This cannot be undone.')) {
       setConfig({
         siteName: 'Snapshot Tool',
+        baseUrl: '',
         username: '',
         password: '',
         desktopWidth: 1920,
@@ -490,6 +621,7 @@ const App = () => {
         resetAll={resetAll}
         handleRunSnapshot={handleRunSnapshot}
         handleRunSnapshotDebug={handleRunSnapshotDebug}
+        handleRunSnapshotSequential={handleRunSnapshotSequential}
         isRunning={isRunning}
         isDragging={isDragging}
         isProcessingFile={isProcessingFile}

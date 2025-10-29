@@ -1,244 +1,443 @@
 const puppeteer = require('puppeteer');
+const { PUPPETEER_CONFIG, SCREENSHOT_SETTINGS } = require('./config/constants');
 const ActionExecutor = require('./action-executor');
 const ScreenshotManager = require('./screenshot-manager');
-const { PUPPETEER_CONFIG, SCREENSHOT_SETTINGS } = require('./config/constants');
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 class SnapshotRunner {
-  constructor(io, debugMode = false) {
-    this.browser = null;
+  constructor(io, debugMode = false, isBatchMode = false) {
     this.logs = [];
     this.io = io;
     this.debugMode = debugMode;
-    this.actionExecutor = new ActionExecutor(this.log.bind(this));
-    this.screenshotManager = new ScreenshotManager(this.log.bind(this), io, debugMode);
+    this.isBatchMode = isBatchMode;
   }
 
   log(message) {
     const timestamp = new Date().toISOString();
     const logMessage = `[${timestamp}] ${message}`;
-    this.logs.push(logMessage);
     console.log(logMessage);
+    this.logs.push(logMessage);
 
-    if (this.debugMode && this.io) {
+    if (this.io) {
       this.io.emit('log', logMessage);
     }
   }
 
-  async processScreenViewport(browser, screen, config, viewportType) {
-    const page = await browser.newPage();
-    const viewportName = viewportType === 'desktop' ? 'Desktop' : 'Mobile';
+  buildFullUrl(baseUrl, screenUrl) {
+    if (!screenUrl || screenUrl.trim() === '') {
+      return '';
+    }
+
+    let fullUrl = '';
+
+    if (screenUrl.startsWith('http://') || screenUrl.startsWith('https://')) {
+      fullUrl = screenUrl;
+    } else {
+      if (!baseUrl || baseUrl.trim() === '') {
+        this.log(`⚠️ Warning: Relative URL "${screenUrl}" provided but no base URL configured`);
+        fullUrl = screenUrl;
+      } else {
+        const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+        const cleanScreenUrl = screenUrl.startsWith('/') ? screenUrl : '/' + screenUrl;
+        fullUrl = cleanBaseUrl + cleanScreenUrl;
+      }
+    }
 
     try {
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-
-      // **FIXED: Authenticate BEFORE setting viewport and navigating**
-      if (config.username && config.password) {
-        this.log(`[${screen.fileName}] ${viewportName}: Setting up authentication for ${config.username}`);
-        await page.authenticate({
-          username: config.username,
-          password: config.password
-        });
-      }
-
-      const width = viewportType === 'desktop' ?
-        parseInt(config.desktopWidth, 10) || SCREENSHOT_SETTINGS.DEFAULT_VIEWPORT.desktop.width :
-        parseInt(config.mobileWidth, 10) || SCREENSHOT_SETTINGS.DEFAULT_VIEWPORT.mobile.width;
-      const height = viewportType === 'desktop' ?
-        parseInt(config.desktopHeight, 10) || SCREENSHOT_SETTINGS.DEFAULT_VIEWPORT.desktop.height :
-        parseInt(config.mobileHeight, 10) || SCREENSHOT_SETTINGS.DEFAULT_VIEWPORT.mobile.height;
-
-      this.log(`[${screen.fileName}] ${viewportName}: Setting viewport ${width}x${height}`);
-      await page.setViewport({ width, height });
-
-      await this.screenshotManager.sendLivePreview(page, screen.fileName, viewportName, 'initializing', screen);
-
-      this.log(`[${screen.fileName}] ${viewportName}: Navigating to ${screen.url} with authentication`);
-
-      // Navigate with longer timeout for auth
-      await page.goto(screen.url, {
-        waitUntil: 'networkidle0',
-        timeout: 90000  // Increased timeout for auth
-      });
-
-      await this.screenshotManager.sendLivePreview(page, screen.fileName, viewportName, 'loaded', screen);
-
-      if (config.enableLazyLoading !== false) {
-        await this.screenshotManager.triggerLazyLoadingAndAnimations(page, screen.fileName, viewportName, screen);
-      }
-
-      await this.screenshotManager.sendLivePreview(page, screen.fileName, viewportName, 'lazy-loaded', screen);
-
-      // **FIXED: Pass viewport type to action executor**
-      const specificActions = viewportType === 'desktop' ? screen.desktopActions : screen.mobileActions;
-      await this.executeActionsWithPreviews(page, screen.sharedActions, 'shared', screen.fileName, viewportName, screen, viewportType);
-      await this.executeActionsWithPreviews(page, specificActions, viewportType, screen.fileName, viewportName, screen, viewportType);
-
-      // **FIXED: Check for stored scroll position for this specific viewport**
-      const hasStoredScrollPosition = this.actionExecutor.hasScrollPosition(viewportType);
-
-      if (!hasStoredScrollPosition) {
-        // No scroll actions for this viewport - reset to top as usual
-        await page.evaluate(() => window.scrollTo(0, 0));
-        await page.waitForTimeout(1000);
-        await this.screenshotManager.sendLivePreview(page, screen.fileName, viewportName, 'final-top', screen);
-      } else {
-        // **Scroll actions performed for this viewport - preserve viewport-specific position**
-        this.log(`[${screen.fileName}] ${viewportName}: Preserving scroll position using viewport-specific coordinates`);
-
-        // Wait extra time for any page settling
-        await page.waitForTimeout(2000);
-
-        // Attempt to restore scroll position for this viewport
-        const restored = await this.actionExecutor.restoreScrollPosition(page, viewportType);
-
-        if (restored) {
-          // Extra wait after restoration
-          await page.waitForTimeout(1000);
-        }
-
-        // Final verification and debug info
-        const finalPos = await page.evaluate(() => ({
-          scrollY: window.scrollY,
-          scrollX: window.scrollX,
-          scrollHeight: document.documentElement.scrollHeight,
-          viewportHeight: window.innerHeight
-        }));
-
-        const storedPos = this.actionExecutor.getScrollPosition(viewportType);
-        this.log(`[${screen.fileName}] ${viewportName}: Final position (${finalPos.scrollX}, ${finalPos.scrollY}) vs stored (${storedPos?.scrollX}, ${storedPos?.scrollY})`);
-
-        await this.screenshotManager.sendLivePreview(page, screen.fileName, viewportName, 'final-scrolled', screen);
-      }
-
-      await this.screenshotManager.takeFinalScreenshot(page, screen, viewportType);
-
-      this.log(`[${screen.fileName}] ${viewportName}: ✅ Screenshot completed`);
-
+      new URL(fullUrl);
+      return fullUrl;
     } catch (error) {
-      this.log(`[${screen.fileName}] ${viewportName}: ❌ Error - ${error.message}`);
-      throw error;
-    } finally {
-      await page.close();
+      this.log(`❌ Invalid URL generated: "${fullUrl}" from base="${baseUrl}" + screen="${screenUrl}"`);
+      return '';
     }
   }
 
-  async executeActionsWithPreviews(page, actions, label, screenName, viewportName, screen, viewportType) {
-    if (!actions || actions.length === 0) {
-      this.log(`No ${label} actions to execute for ${viewportName}`);
-      return;
-    }
+  async executeActionsWithPreviews(page, actions, actionType, screenName, viewportName, screen, viewportType) {
+    if (!actions || actions.length === 0) return;
 
-    this.log(`Executing ${actions.length} ${label} action(s) for ${viewportName}`);
-
-    for (let i = 0; i < actions.length; i++) {
-      const action = actions[i];
+    for (const action of actions) {
       await this.actionExecutor.executeAction(page, action, viewportType);
 
-      // Send preview after significant actions in debug mode
-      if (this.debugMode && ['Adjust Styling', 'Execute JS', 'Show Element', 'Remove Element', 'Scroll Into View'].includes(action.type)) {
-        await this.screenshotManager.sendLivePreview(page, screenName, viewportName, `action-${i}-${action.type.toLowerCase()}`, screen);
-      }
-
-      // **After scroll actions, re-verify position for this viewport**
-      if (action.type === 'Scroll Into View') {
-        await page.waitForTimeout(500);
-
-        // Double-check and re-store position after action preview for this viewport
-        const currentPos = await page.evaluate(() => ({
-          scrollY: window.scrollY,
-          scrollX: window.scrollX,
-          scrollHeight: document.documentElement.scrollHeight,
-          viewportHeight: window.innerHeight,
-          timestamp: Date.now()
-        }));
-
-        this.actionExecutor.scrollPositions[viewportType] = currentPos;
-        this.log(`Re-stored scroll position for ${viewportType} after action: ${currentPos.scrollY}px`);
+      if (this.debugMode) {
+        await this.screenshotManager.sendLivePreview(page, screenName, viewportName, `after-${actionType}-action`, screen);
       }
     }
   }
 
-  async runSnapshot(config) {
+  // ✅ NEW: Process a single screen with its own browser instance
+  async processScreen(screen, config, screenIndex, totalScreens, paddingLength) {
+    let browser = null;
+
     try {
-      this.log('🚀 Starting Puppeteer browser...');
+      // ✅ Check if at least one viewport is enabled
+      const enableDesktop = screen.enableDesktop !== false;
+      const enableMobile = screen.enableMobile !== false;
 
-      this.browser = await puppeteer.launch(PUPPETEER_CONFIG);
+      if (!enableDesktop && !enableMobile) {
+        this.log(`[${screen.fileName}] ⚠️ Both viewports disabled - skipping screen`);
+        return {
+          success: true,
+          screen: screen.fileName,
+          screenshots: [],
+          skipped: true
+        };
+      }
 
-      const screenshotTasks = [];
+      this.log(`[${screen.fileName}] 🚀 Launching dedicated browser instance...`);
+      if (!enableDesktop) {
+        this.log(`[${screen.fileName}] ℹ️ Desktop viewport disabled - mobile only`);
+      }
+      if (!enableMobile) {
+        this.log(`[${screen.fileName}] ℹ️ Mobile viewport disabled - desktop only`);
+      }
 
-      for (const screen of config.screens) {
-        if (!screen.url) {
-          this.log(`⚠️ Skipping screen with no URL: ${screen.fileName}`);
-          continue;
-        }
+      browser = await puppeteer.launch(PUPPETEER_CONFIG);
 
-        // **Clear scroll positions for each new screen**
-        this.actionExecutor.clearScrollPositions();
+      const actionExecutor = new ActionExecutor(this.log.bind(this));
+      const screenshotManager = new ScreenshotManager(
+        this.log.bind(this),
+        this.io,
+        this.debugMode,
+        this.isBatchMode
+      );
 
-        screenshotTasks.push(
-          this.processScreenViewport(this.browser, screen, config, 'desktop'),
-          this.processScreenViewport(this.browser, screen, config, 'mobile')
+      const screenWithIndex = {
+        ...screen,
+        screenIndex: screenIndex,
+        paddingLength: paddingLength
+      };
+
+      const fullUrl = this.buildFullUrl(config.baseUrl, screen.url);
+
+      if (!fullUrl) {
+        throw new Error(`Invalid URL for screen: ${screen.fileName}`);
+      }
+
+      // ✅ Process only enabled viewports
+      const viewportTasks = [];
+
+      if (enableDesktop) {
+        viewportTasks.push(
+          this.processScreenViewport(browser, screenWithIndex, config, 'desktop', actionExecutor, screenshotManager)
         );
       }
 
-      this.log(`📸 Starting ${screenshotTasks.length} parallel screenshot tasks...`);
+      if (enableMobile) {
+        viewportTasks.push(
+          this.processScreenViewport(browser, screenWithIndex, config, 'mobile', actionExecutor, screenshotManager)
+        );
+      }
 
-      const results = [];
+      const results = await Promise.allSettled(viewportTasks);
 
-      for (let i = 0; i < screenshotTasks.length; i += SCREENSHOT_SETTINGS.BATCH_SIZE) {
-        const batch = screenshotTasks.slice(i, i + SCREENSHOT_SETTINGS.BATCH_SIZE);
-        this.log(`Processing batch ${Math.floor(i/SCREENSHOT_SETTINGS.BATCH_SIZE) + 1}/${Math.ceil(screenshotTasks.length/SCREENSHOT_SETTINGS.BATCH_SIZE)} (${batch.length} tasks)`);
+      const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success !== false).length;
+      const failed = results.filter(r => r.status === 'rejected' || r.value?.success === false).length;
+
+      const viewportCount = enableDesktop && enableMobile ? 'both' : enableDesktop ? 'desktop only' : 'mobile only';
+      this.log(`[${screen.fileName}] ✅ Browser instance completed (${viewportCount}) - ${successful} successful, ${failed} failed`);
+
+      const screenshots = screenshotManager.getScreenshots();
+
+      return {
+        success: failed === 0,
+        screen: screen.fileName,
+        screenshots: screenshots,
+        results: results
+      };
+
+    } catch (error) {
+      this.log(`[${screen.fileName}] ❌ Browser instance error: ${error.message}`);
+      return {
+        success: false,
+        screen: screen.fileName,
+        error: error.message
+      };
+    } finally {
+      if (browser) {
+        try {
+          await browser.close();
+          this.log(`[${screen.fileName}] 🔒 Browser instance closed`);
+        } catch (e) {
+          this.log(`[${screen.fileName}] ⚠️ Failed to close browser: ${e.message}`);
+        }
+      }
+    }
+  }
+
+
+  async processScreenViewport(browser, screen, config, viewportType, actionExecutor, screenshotManager) {
+    let page = await browser.newPage();
+    const viewportName = viewportType === 'desktop' ? 'Desktop' : 'Mobile';
+
+    const maxRetries = 2;
+    let attempt = 0;
+
+    while (attempt <= maxRetries) {
+      try {
+        attempt++;
+
+        if (attempt > 1) {
+          this.log(`[${screen.fileName}] ${viewportName}: Retry attempt ${attempt}/${maxRetries + 1}`);
+        }
+
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+
+        if (config.username && config.password) {
+          this.log(`[${screen.fileName}] ${viewportName}: Setting up authentication for ${config.username}`);
+          await page.authenticate({
+            username: config.username,
+            password: config.password
+          });
+        }
+
+        const width = viewportType === 'desktop' ?
+          parseInt(config.desktopWidth, 10) || SCREENSHOT_SETTINGS.DEFAULT_VIEWPORT.desktop.width :
+          parseInt(config.mobileWidth, 10) || SCREENSHOT_SETTINGS.DEFAULT_VIEWPORT.mobile.width;
+        const height = viewportType === 'desktop' ?
+          parseInt(config.desktopHeight, 10) || SCREENSHOT_SETTINGS.DEFAULT_VIEWPORT.desktop.height :
+          parseInt(config.mobileHeight, 10) || SCREENSHOT_SETTINGS.DEFAULT_VIEWPORT.mobile.height;
+
+        this.log(`[${screen.fileName}] ${viewportName}: Setting viewport ${width}x${height} with deviceScaleFactor: 1`);
+        await page.setViewport({
+          width,
+          height,
+          deviceScaleFactor: 1,
+          isMobile: false,
+          hasTouch: false,
+          isLandscape: false
+        });
+
+        const actualViewport = await page.evaluate(() => ({
+          width: window.innerWidth,
+          height: window.innerHeight,
+          devicePixelRatio: window.devicePixelRatio
+        }));
+
+        this.log(`[${screen.fileName}] ${viewportName}: Verified viewport - ${actualViewport.width}x${actualViewport.height}, DPR: ${actualViewport.devicePixelRatio}`);
+
+        if (actualViewport.width !== width || actualViewport.devicePixelRatio !== 1) {
+          this.log(`[${screen.fileName}] ${viewportName}: ⚠️ Viewport mismatch - forcing reset`);
+
+          await page.setViewport({
+            width,
+            height,
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false
+          });
+
+          await sleep(500);
+        }
+
+        await screenshotManager.sendLivePreview(page, screen.fileName, viewportName, 'initializing', screen);
+
+        const fullUrl = this.buildFullUrl(config.baseUrl, screen.url);
+
+        if (!fullUrl) {
+          throw new Error(`Invalid or missing URL for screen "${screen.fileName}"`);
+        }
+
+        this.log(`[${screen.fileName}] ${viewportName}: Navigating to ${fullUrl}`);
+
+        await page.goto(fullUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000
+        });
+
+        const initialDelay = this.isBatchMode ? 3000 : 2000;
+        await sleep(initialDelay);
+
+        await screenshotManager.sendLivePreview(page, screen.fileName, viewportName, 'page-loaded', screen);
+
+        if (config.enableLazyLoading !== false) {
+          await screenshotManager.triggerLazyLoadingAndAnimations(page, screen.fileName, viewportName, screen);
+        }
+
+        const specificActions = viewportType === 'desktop' ? screen.desktopActions : screen.mobileActions;
+
+        this.log(`Executing ${screen.sharedActions?.length || 0} shared action(s) for ${viewportName}`);
+        await this.executeActionsWithPreviews(page, screen.sharedActions, 'shared', screen.fileName, viewportName, screen, viewportType, actionExecutor, screenshotManager);
+
+        this.log(`Executing ${specificActions?.length || 0} ${viewportType} action(s) for ${viewportName}`);
+        await this.executeActionsWithPreviews(page, specificActions, viewportType, screen.fileName, viewportName, screen, viewportType, actionExecutor, screenshotManager);
+
+        const hasStoredScrollPosition = actionExecutor.hasScrollPosition(viewportType);
+
+        if (hasStoredScrollPosition) {
+          const scrollPosition = actionExecutor.getScrollPosition(viewportType);
+          this.log(`[${screen.fileName}] ${viewportName}: Restoring scroll position to ${scrollPosition}px`);
+
+          await page.evaluate((pos) => {
+            window.scrollTo(0, pos);
+          }, scrollPosition);
+
+          const scrollDelay = this.isBatchMode ? 1500 : 1000;
+          await sleep(scrollDelay);
+        }
+
+        await screenshotManager.takeFinalScreenshot(page, screen, viewportType);
+
+        this.log(`[${screen.fileName}] ${viewportName}: ✅ Screenshot completed`);
+
+        break;
+
+      } catch (error) {
+        this.log(`[${screen.fileName}] ${viewportName}: ❌ Error (Attempt ${attempt}/${maxRetries + 1}) - ${error.message}`);
+
+        if (attempt > maxRetries) {
+          this.log(`[${screen.fileName}] ${viewportName}: ⚠️ SKIPPED after ${maxRetries + 1} attempts`);
+
+          return {
+            success: false,
+            screen: screen.fileName,
+            viewport: viewportName,
+            error: error.message
+          };
+        }
+
+        this.log(`[${screen.fileName}] ${viewportName}: Waiting 3 seconds before retry...`);
+        await sleep(3000);
 
         try {
-          const batchResults = await Promise.allSettled(batch);
-          results.push(...batchResults);
+          await page.close();
+        } catch (e) {
+          // Ignore
+        }
 
-          const successful = batchResults.filter(r => r.status === 'fulfilled').length;
-          const failed = batchResults.filter(r => r.status === 'rejected').length;
-          this.log(`Batch completed: ${successful} successful, ${failed} failed`);
+        page = await browser.newPage();
+      }
+    }
 
-        } catch (error) {
-          this.log(`❌ Batch error: ${error.message}`);
+    try {
+      await page.close();
+    } catch (e) {
+      this.log(`[${screen.fileName}] ${viewportName}: Warning - failed to close page: ${e.message}`);
+    }
+
+    return { success: true, screen: screen.fileName, viewport: viewportName };
+  }
+
+  // Fixed: Pass actionExecutor and screenshotManager
+  async executeActionsWithPreviews(page, actions, actionType, screenName, viewportName, screen, viewportType, actionExecutor, screenshotManager) {
+    if (!actions || actions.length === 0) return;
+
+    for (const action of actions) {
+      await actionExecutor.executeAction(page, action, viewportType);
+
+      if (this.debugMode) {
+        await screenshotManager.sendLivePreview(page, screenName, viewportName, `after-${actionType}-action`, screen);
+      }
+    }
+  }
+
+  // ✅ NEW: Run with concurrency limit
+  async runSnapshot(config) {
+    try {
+      const CONCURRENCY_LIMIT = 8;
+
+      this.log(`🚀 Starting snapshot process with ${CONCURRENCY_LIMIT} concurrent browser instances...`);
+
+      const totalScreens = config.screens.length;
+      const paddingLength = totalScreens.toString().length;
+
+      const allScreenshots = [];
+      const failedScreens = [];
+      let completedCount = 0;
+
+      for (let i = 0; i < totalScreens; i += CONCURRENCY_LIMIT) {
+        const batch = config.screens.slice(i, i + CONCURRENCY_LIMIT);
+        const batchNumber = Math.floor(i / CONCURRENCY_LIMIT) + 1;
+        const totalBatches = Math.ceil(totalScreens / CONCURRENCY_LIMIT);
+
+        this.log(`\n${'='.repeat(60)}`);
+        this.log(`📦 Starting batch ${batchNumber}/${totalBatches} (${batch.length} screens)`);
+        this.log(`${'='.repeat(60)}\n`);
+
+        const batchPromises = batch.map((screen, batchIndex) => {
+          // ✅ Use screen.screenIndex if already set, otherwise calculate
+          const screenIndex = screen.screenIndex !== undefined && screen.screenIndex !== null
+            ? screen.screenIndex
+            : i + batchIndex + 1;
+
+          // ✅ Use screen.paddingLength if already set, otherwise calculate
+          const padding = screen.paddingLength !== undefined && screen.paddingLength !== null
+            ? screen.paddingLength
+            : paddingLength;
+
+          const fullUrl = this.buildFullUrl(config.baseUrl, screen.url);
+
+          if (!fullUrl) {
+            this.log(`⚠️ Skipping screen with no URL: ${screen.fileName}`);
+            return Promise.resolve({ success: false, screen: screen.fileName, error: 'No URL' });
+          }
+
+          return this.processScreen(screen, config, screenIndex, totalScreens, padding);
+        });
+
+        const batchResults = await Promise.allSettled(batchPromises);
+
+        batchResults.forEach((result, idx) => {
+          completedCount++;
+
+          if (result.status === 'fulfilled' && result.value?.success) {
+            if (result.value.screenshots) {
+              allScreenshots.push(...result.value.screenshots);
+            }
+            this.log(`✅ [${completedCount}/${totalScreens}] ${result.value.screen} completed successfully`);
+          } else {
+            const error = result.status === 'rejected' ? result.reason.message : result.value?.error;
+            failedScreens.push({
+              screen: result.value?.screen || batch[idx].fileName,
+              error: error || 'Unknown error'
+            });
+            this.log(`❌ [${completedCount}/${totalScreens}] ${batch[idx].fileName} failed: ${error}`);
+          }
+        });
+
+        if (i + CONCURRENCY_LIMIT < totalScreens) {
+          this.log(`\n⏸️ Waiting 2 seconds before next batch...\n`);
+          await sleep(2000);
         }
       }
 
-      const successful = results.filter(r => r.status === 'fulfilled').length;
-      const failed = results.filter(r => r.status === 'rejected').length;
+      const successful = totalScreens - failedScreens.length;
 
-      if (failed > 0) {
-        this.log(`⚠️ Completed with ${successful} successful and ${failed} failed screenshots`);
-        results.forEach((result, index) => {
-          if (result.status === 'rejected') {
-            this.log(`❌ Task ${index + 1} failed: ${result.reason.message}`);
-          }
+      this.log(`\n${'='.repeat(60)}`);
+      this.log(`📊 Final Summary`);
+      this.log(`${'='.repeat(60)}`);
+      this.log(`✅ Successful: ${successful}`);
+      this.log(`❌ Failed: ${failedScreens.length}`);
+      this.log(`${'='.repeat(60)}\n`);
+
+      if (failedScreens.length > 0) {
+        this.log(`⚠️ Failed Screens:`);
+        failedScreens.forEach((failure, idx) => {
+          this.log(`  ${idx + 1}. ${failure.screen}: ${failure.error}`);
         });
-      } else {
-        this.log(`✅ All ${successful} screenshots completed successfully!`);
       }
 
       return {
         logs: this.logs,
-        screenshots: this.screenshotManager.getScreenshots(),
+        screenshots: allScreenshots,
         summary: {
-          total: screenshotTasks.length,
+          total: totalScreens,
           successful,
-          failed
+          failed: failedScreens.length,
+          failedScreens
         }
       };
 
     } catch (error) {
       this.log(`❌ Fatal error: ${error.message}`);
       throw error;
-    } finally {
-      if (this.browser) {
-        await this.browser.close();
-        this.log('🔒 Browser closed');
-      }
     }
   }
+
 }
 
 module.exports = async (config, io, debugMode = false) => {
-  const runner = new SnapshotRunner(io, debugMode);
+  const isBatchMode = config.screens && config.screens.length > 1;
+  const runner = new SnapshotRunner(io, debugMode, isBatchMode);
   return await runner.runSnapshot(config);
 };

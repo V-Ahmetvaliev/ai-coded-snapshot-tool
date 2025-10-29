@@ -9,7 +9,9 @@ module.exports = {
     'Click Selector',
     'Hover Selector',
     'Scroll Into View',
-    'Scroll Horizontally'
+    'Scroll Horizontally',
+    'Debug Element Styles',
+    'Inject CSS'
   ],
 
   SCREENSHOT_TYPES: [
@@ -40,5 +42,18 @@ module.exports = {
       desktop: { width: 1920, height: 1080 },
       mobile: { width: 436, height: 1080 }
     }
+  },
+
+  DEFAULT_CONFIG: {
+    siteName: 'Snapshot Tool',
+    baseUrl: '',
+    username: '',
+    password: '',
+    desktopWidth: 1920,
+    desktopHeight: 1080,
+    mobileWidth: 436,
+    mobileHeight: 1080,
+    enableLazyLoading: true,
+    screens: []
   }
 };

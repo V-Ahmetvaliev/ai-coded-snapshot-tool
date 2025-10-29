@@ -91,6 +91,13 @@ body {
   background-color: #404040;
 }
 
+.form-hint {
+  font-size: 0.85em;
+  color: #95a5a6;
+  margin-top: 5px;
+  line-height: 1.4;
+}
+
 .input-hint {
   font-size: 0.75em;
   color: #888;
@@ -800,6 +807,21 @@ body {
   border-left: 4px solid #f39c12;
 }
 
+.css-textarea {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  background-color: #2c3e50;
+  color: #ecf0f1;
+  border: 1px solid #34495e;
+  border-radius: 4px;
+  padding: 10px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.css-textarea::placeholder {
+  color: #7f8c8d;
+}
+
 .complex-action {
   border-left: 3px solid #9b59b6;
 }
@@ -1103,10 +1125,30 @@ body {
 
 .selector-config-row {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: 2fr 1fr 1fr;
   gap: 25px;
-  align-items: end;
+  align-items: start;
   margin-bottom: 20px;
+}
+
+/* Make the checkbox align with other inputs */
+.selector-config-row .checkbox-group {
+  display: flex;
+  align-items: flex-end; /* Align to bottom to match input fields */
+  margin: 0;
+}
+
+.selector-config-row .checkbox-group .checkbox-label {
+  margin: 0;
+  padding: 10px 0;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+/* Ensure form groups in selector row don't have extra margin */
+.selector-config-row .form-group {
+  margin: 0;
 }
 
 .selector-input {
@@ -1355,3 +1397,71 @@ body {
   }
 }
 
+
+
+.crop-settings {
+  margin-top: 15px;
+  padding: 15px;
+  background: #34495e;
+  border-radius: 6px;
+}
+
+.crop-settings + .crop-settings {
+  margin-top: 10px; /* Space between desktop and mobile crop sections */
+}
+
+.crop-settings h4 {
+  margin: 0 0 10px 0;
+  font-size: 0.9em;
+  color: #ecf0f1;
+}
+
+.crop-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 10px;
+}
+
+.crop-grid .form-group {
+  margin: 0;
+}
+
+.crop-grid label {
+  font-size: 0.85em;
+}
+
+.crop-grid input {
+  width: 100%;
+}
+
+.button-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.run-info {
+  margin-bottom: 20px;
+  padding: 10px;
+  background: rgba(52, 152, 219, 0.1);
+  border-left: 3px solid #3498db;
+  border-radius: 4px;
+  line-height: 1.6;
+}
+
+/* Viewport badges */
+.viewport-badge {
+  font-size: 0.8em;
+}
+
+.viewport-badge.desktop-only {
+  background: #0e639c;
+}
+
+.viewport-badge.mobile-only {
+  background: #27ae60;
+}
+
+.viewport-badge.disabled {
+  background: #e74c3c;
+}
