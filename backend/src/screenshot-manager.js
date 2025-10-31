@@ -1,6 +1,6 @@
 const path = require('path');
 const { SCREENSHOT_SETTINGS } = require('./config/constants');
-// const fs = require("fs");
+const fs = require("fs");
 const sleep = require('node:timers/promises').setTimeout;
 
 class ScreenshotManager {
@@ -46,7 +46,42 @@ class ScreenshotManager {
     }
   }
 
+  // ✅ NEW: Ensure viewport folders exist
+  async ensureViewportFolders() {
+    const snapshotsDir = path.join(__dirname, '..', 'snapshots');
+    const desktopDir = path.join(snapshotsDir, 'desktop');
+    const mobileDir = path.join(snapshotsDir, 'mobile');
+
+    try {
+      await fs.mkdir(snapshotsDir, { recursive: true });
+      await fs.mkdir(desktopDir, { recursive: true });
+      await fs.mkdir(mobileDir, { recursive: true });
+      this.log(`📁 Ensured viewport folders exist: desktop/ and mobile/`);
+    } catch (error) {
+      this.log(`⚠️ Error creating viewport folders: ${error.message}`);
+    }
+  }
+
+  // ✅ UPDATED: Generate screenshot path with viewport folder
+  generateScreenshotPath(screen, viewportType) {
+    const snapshotsDir = path.join(__dirname, '..', 'snapshots');
+
+    // Add viewport subfolder
+    const viewportFolder = viewportType === 'desktop' ? 'desktop' : 'mobile';
+    const viewportDir = path.join(snapshotsDir, viewportFolder);
+
+    const paddingLength = screen.paddingLength || 2;
+    const screenIndex = screen.screenIndex !== undefined ? screen.screenIndex : 1;
+    const paddedIndex = String(screenIndex).padStart(paddingLength, '0');
+    const viewportName = viewportType === 'desktop' ? 'desktop' : 'mobile';
+    const fileName = `${paddedIndex}. ${screen.fileName} ${viewportName}.png`;
+
+    return path.join(viewportDir, fileName);
+  }
+
   async takeFinalScreenshot(page, screen, viewportType) {
+    // ✅ Ensure folders exist before taking screenshot
+    await this.ensureViewportFolders();
     await sleep(1000);
 
     // ✅ Build numbered filename
@@ -55,7 +90,9 @@ class ScreenshotManager {
       : '';
 
     const filename = `${prefix}${screen.fileName} ${viewportType}.png`;
-    const screenshotPath = path.join(__dirname, '..', 'snapshots', filename);
+    const screenshotPath = this.generateScreenshotPath(screen, viewportType);
+
+    this.log(`Taking final screenshot: ${path.basename(screenshotPath)}`);
 
     try {
       if (screen.screenshotType === 'Screenshot of Selector') {
@@ -65,17 +102,15 @@ class ScreenshotManager {
       }
 
       this.screenshots.push({
-        filename,
-        path: screenshotPath,
-        url: `/snapshots/${encodeURIComponent(filename)}`,
         screen: screen.fileName,
         viewport: viewportType,
-        screenshotType: screen.screenshotType || 'Full Page'
+        path: screenshotPath,
+        timestamp: new Date().toISOString()
       });
 
-      this.log(`📸 Screenshot saved: ${filename}`);
+      this.log(`✅ Screenshot saved: ${viewportType}/${path.basename(screenshotPath)}`);
     } catch (error) {
-      this.log(`❌ Failed to take screenshot: ${error.message}`);
+      this.log(`❌ Screenshot failed: ${error.message}`);
       throw error;
     }
 

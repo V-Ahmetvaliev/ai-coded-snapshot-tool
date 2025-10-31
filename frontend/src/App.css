@@ -468,7 +468,7 @@ body {
 .screens-container {
   display: flex;
   flex-direction: column;
-  gap: 25px;
+  gap: 8px;
 }
 
 .screen-card {

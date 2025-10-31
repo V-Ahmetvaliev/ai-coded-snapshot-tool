@@ -479,6 +479,193 @@ const App = () => {
   };
 
 
+  // State variables (add to existing useState declarations)
+  const [customScreenRange, setCustomScreenRange] = useState('');
+  const [customScreenRangeParallel, setCustomScreenRangeParallel] = useState('');
+
+  // ✅ Parse range/list input (e.g., "1-5" or "1,3,5,7" or "1-3,5,7-9")
+  const parseScreenSelection = useCallback((input) => {
+    const screenIndices = new Set();
+
+    if (!input || input.trim() === '') {
+      return [];
+    }
+
+    const parts = input.split(',').map(p => p.trim());
+
+    for (const part of parts) {
+      if (part.includes('-')) {
+        // Range: "3-7"
+        const [start, end] = part.split('-').map(n => parseInt(n.trim(), 10));
+        if (!isNaN(start) && !isNaN(end) && start > 0 && end > 0 && start <= end) {
+          for (let i = start; i <= Math.min(end, config.screens.length); i++) {
+            screenIndices.add(i - 1); // Convert to 0-based index
+          }
+        }
+      } else {
+        // Single number: "5"
+        const num = parseInt(part, 10);
+        if (!isNaN(num) && num > 0 && num <= config.screens.length) {
+          screenIndices.add(num - 1); // Convert to 0-based index
+        }
+      }
+    }
+
+    return Array.from(screenIndices).sort((a, b) => a - b);
+  }, [config.screens.length]);
+
+  // ✅ NEW: Run custom range in SEQUENTIAL mode (one by one)
+  const handleRunCustomRange = useCallback(async (debugMode = false) => {
+    const indices = parseScreenSelection(customScreenRange);
+
+    if (indices.length === 0) {
+      setError('Invalid range or list. Examples: "1-5" or "1,3,5,7" or "1-3,5,8-10"');
+      return;
+    }
+
+    setIsRunning(true);
+    setError('');
+    setLogs([`🚀 Starting sequential snapshot for custom range (${indices.length} screens)...`]);
+
+    if (debugMode) {
+      clearPreviews();
+      setShowPreviewWindow(true);
+    }
+
+    const failedScreens = [];
+    const successfulScreens = [];
+
+    try {
+      for (let i = 0; i < indices.length; i++) {
+        const screenIndex = indices[i];
+        const screen = config.screens[screenIndex];
+
+        if (!screen) continue;
+
+        const progressNumber = i + 1;
+        const actualScreenNumber = screenIndex + 1;
+
+        setLogs(prev => [...prev, `\n📸 [${progressNumber}/${indices.length}] Processing screen #${actualScreenNumber}: ${screen.fileName}...`]);
+
+        try {
+          const endpoint = debugMode ? 'run-screen-snapshot-debug' : 'run-screen-snapshot';
+
+          const response = await axios.post(`${API_BASE}/${endpoint}`, {
+            screen,
+            config,
+            screenIndex: actualScreenNumber
+          }, { timeout: 300000 });
+
+          if (response.data.success) {
+            setLogs(prev => [...prev, ...response.data.logs]);
+            successfulScreens.push(screen.fileName);
+            setLogs(prev => [...prev, `✅ [${progressNumber}/${indices.length}] ${screen.fileName} completed`]);
+          } else {
+            failedScreens.push({ name: screen.fileName, error: 'Unknown error' });
+            setLogs(prev => [...prev, `❌ [${progressNumber}/${indices.length}] ${screen.fileName} failed`]);
+          }
+        } catch (error) {
+          const errorMessage = error.response?.data?.message || error.message || 'Unknown error';
+          failedScreens.push({ name: screen.fileName, error: errorMessage });
+          setLogs(prev => [...prev, `❌ [${progressNumber}/${indices.length}] ${screen.fileName} failed: ${errorMessage}`]);
+        }
+
+        if (i < indices.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+
+      // Summary
+      setLogs(prev => [
+        ...prev,
+        `\n${'='.repeat(50)}`,
+        `📊 Sequential Custom Range Complete`,
+        `✅ Successful: ${successfulScreens.length}`,
+        `❌ Failed: ${failedScreens.length}`,
+        `${'='.repeat(50)}`
+      ]);
+
+      if (failedScreens.length === 0) {
+        alert(`✅ All ${successfulScreens.length} screens completed successfully!`);
+      } else {
+        alert(`⚠️ Completed with ${successfulScreens.length} successful and ${failedScreens.length} failed screenshots`);
+      }
+
+      // Clear input after successful run
+      setCustomScreenRange('');
+
+    } catch (error) {
+      const errorMessage = error.message || 'Unknown error occurred';
+      setError(`Sequential custom range failed: ${errorMessage}`);
+      setLogs(prev => [...prev, `❌ Fatal error: ${errorMessage}`]);
+    } finally {
+      setIsRunning(false);
+    }
+  }, [customScreenRange, parseScreenSelection, config, clearPreviews, setShowPreviewWindow, setIsRunning, setError, setLogs]);
+
+  // ✅ NEW: Run custom range in PARALLEL mode (batches)
+  const handleRunCustomRangeParallel = useCallback(async (debugMode = false) => {
+    const indices = parseScreenSelection(customScreenRangeParallel);
+
+    if (indices.length === 0) {
+      setError('Invalid range or list. Examples: "1-5" or "1,3,5,7" or "1-3,5,8-10"');
+      return;
+    }
+
+    setIsRunning(true);
+    setError('');
+    setLogs([`🚀 Starting parallel snapshot for custom range (${indices.length} screens)...`]);
+
+    if (debugMode) {
+      clearPreviews();
+      setShowPreviewWindow(true);
+    }
+
+    try {
+      const selectedScreensArray = indices.map(idx => config.screens[idx]).filter(Boolean);
+
+      if (selectedScreensArray.length === 0) {
+        setError('No valid screens found in the specified range');
+        setIsRunning(false);
+        return;
+      }
+
+      const selectedConfig = {
+        ...config,
+        screens: selectedScreensArray.map((screen, idx) => ({
+          ...screen,
+          // Preserve original screen index for numbering
+          screenIndex: indices[idx] + 1,
+          paddingLength: config.screens.length.toString().length
+        }))
+      };
+
+      const endpoint = debugMode ? 'run-snapshot-debug' : 'run-snapshot';
+
+      const response = await axios.post(`${API_BASE}/${endpoint}`, selectedConfig, {
+        timeout: 600000
+      });
+
+      if (response.data.success) {
+        setLogs(prev => [...prev, ...response.data.logs, `✅ Parallel custom range completed!`]);
+
+        // Clear input after successful run
+        setCustomScreenRangeParallel('');
+      } else {
+        setError('Snapshot process failed');
+        setLogs(prev => [...prev, '❌ Process failed']);
+      }
+    } catch (error) {
+      const errorMessage = error.response?.data?.details || error.message || 'Unknown error occurred';
+      setError(`Failed to run parallel custom range: ${errorMessage}`);
+      setLogs(prev => [...prev, `❌ Error: ${errorMessage}`]);
+    } finally {
+      setIsRunning(false);
+    }
+  }, [customScreenRangeParallel, parseScreenSelection, config, clearPreviews, setShowPreviewWindow, setIsRunning, setError, setLogs]);
+
+
+
   // File operations (unchanged)
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
@@ -622,6 +809,12 @@ const App = () => {
         handleRunSnapshot={handleRunSnapshot}
         handleRunSnapshotDebug={handleRunSnapshotDebug}
         handleRunSnapshotSequential={handleRunSnapshotSequential}
+        customScreenRange={customScreenRange}
+        setCustomScreenRange={setCustomScreenRange}
+        handleRunCustomRange={handleRunCustomRange}
+        customScreenRangeParallel={customScreenRangeParallel}
+        setCustomScreenRangeParallel={setCustomScreenRangeParallel}
+        handleRunCustomRangeParallel={handleRunCustomRangeParallel}
         isRunning={isRunning}
         isDragging={isDragging}
         isProcessingFile={isProcessingFile}

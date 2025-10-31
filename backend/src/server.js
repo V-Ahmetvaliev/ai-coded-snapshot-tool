@@ -12,7 +12,12 @@ const PORT = process.env.PORT || 5001;
 
 // Ensure necessary directories exist
 const ensureDirectories = async () => {
-  const dirs = ['snapshots', 'logs'];
+  const dirs = [
+    'snapshots',
+    'snapshots/desktop',
+    'snapshots/mobile',
+    'logs'
+  ];
   for (const dir of dirs) {
     const dirPath = path.join(__dirname, '..', dir);
     try {
@@ -42,6 +47,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
+// Serve snapshots directory including subfolders
 app.use('/snapshots', express.static(path.join(__dirname, '..', 'snapshots')));
 
 // Socket.IO with the same CORS policy
@@ -236,12 +242,35 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ✅ UPDATED: Get screenshots from both folders
 app.get('/api/screenshots', async (req, res) => {
   try {
     const snapshotsDir = path.join(__dirname, '..', 'snapshots');
-    const files = await fs.readdir(snapshotsDir);
-    const screenshots = files.filter(file => file.endsWith('.png'));
-    res.json({ screenshots });
+    const desktopDir = path.join(snapshotsDir, 'desktop');
+    const mobileDir = path.join(snapshotsDir, 'mobile');
+
+    const screenshots = {
+      desktop: [],
+      mobile: []
+    };
+
+    // Get desktop screenshots
+    try {
+      const desktopFiles = await fs.readdir(desktopDir);
+      screenshots.desktop = desktopFiles.filter(file => file.endsWith('.png'));
+    } catch (error) {
+      console.log('No desktop screenshots found');
+    }
+
+    // Get mobile screenshots
+    try {
+      const mobileFiles = await fs.readdir(mobileDir);
+      screenshots.mobile = mobileFiles.filter(file => file.endsWith('.png'));
+    } catch (error) {
+      console.log('No mobile screenshots found');
+    }
+
+    res.json(screenshots);
   } catch (error) {
     res.status(500).json({ error: 'Failed to list screenshots' });
   }
@@ -252,7 +281,8 @@ const startServer = async () => {
   await ensureDirectories();
   server.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`📸 Screenshots available at http://localhost:${PORT}/snapshots`);
+    console.log(`📸 Desktop screenshots: http://localhost:${PORT}/snapshots/desktop`);
+    console.log(`📱 Mobile screenshots: http://localhost:${PORT}/snapshots/mobile`);
   });
 };
 

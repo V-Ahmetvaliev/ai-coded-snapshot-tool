@@ -9,6 +9,12 @@ const Sidebar = ({
                    handleRunSnapshot,
                    handleRunSnapshotDebug,
                    handleRunSnapshotSequential,
+                   customScreenRange,
+                   setCustomScreenRange,
+                   handleRunCustomRange,
+                   customScreenRangeParallel,
+                   setCustomScreenRangeParallel,
+                   handleRunCustomRangeParallel,
                    isRunning,
                    isDragging,
                    isProcessingFile,
@@ -17,7 +23,7 @@ const Sidebar = ({
                    handleDrop,
                    configSummary,
                    error,
-                   logs
+                   logs,
                  }) => {
   return (
     <div className="sidebar">
@@ -184,7 +190,7 @@ const Sidebar = ({
         <div className="config-section">
           <h3>🚀 Run Snapshots</h3>
 
-          {/* Existing Parallel Batch Buttons */}
+          {/* Run All - Parallel */}
           <div className="button-group">
             <button
               onClick={handleRunSnapshot}
@@ -202,7 +208,7 @@ const Sidebar = ({
             </button>
           </div>
 
-          {/* ✅ NEW: Sequential Run Buttons */}
+          {/* Run All - Sequential */}
           <div className="button-group" style={{ marginTop: '10px' }}>
             <button
               onClick={() => handleRunSnapshotSequential(false)}
@@ -218,6 +224,103 @@ const Sidebar = ({
             >
               🔍 Debug All (One by One)
             </button>
+          </div>
+
+          {/* Parallel Custom Range */}
+          <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #34495e' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9em', color: '#ecf0f1', fontWeight: '600' }}>
+              🚀 Parallel Custom Range
+            </label>
+            <input
+              type="text"
+              value={customScreenRangeParallel}
+              onChange={(e) => setCustomScreenRangeParallel(e.target.value)}
+              placeholder="e.g., 1-5 or 1,3,5 or 1-3,7,9-12"
+              disabled={isRunning || config.screens.length === 0}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                borderRadius: '4px',
+                border: '1px solid #34495e',
+                background: 'rgb(60, 60, 60)',
+                color: '#ecf0f1',
+                fontSize: '0.9em',
+                marginTop: '8px',
+                marginBottom: '16px',
+              }}
+            />
+            <div className="button-group">
+              <button
+                onClick={() => handleRunCustomRangeParallel(false)}
+                disabled={isRunning || config.screens.length === 0 || !customScreenRangeParallel}
+                className="button primary"
+              >
+                ⚡ Run Parallel
+              </button>
+              <button
+                onClick={() => handleRunCustomRangeParallel(true)}
+                disabled={isRunning || config.screens.length === 0 || !customScreenRangeParallel}
+                className="button secondary"
+              >
+                🔍 Debug Parallel
+              </button>
+            </div>
+            <div style={{ fontSize: '0.75em', color: '#95a5a6', marginTop: '8px', lineHeight: '1.5' }}>
+              Runs selected screens in <strong>parallel batches</strong> (fast)
+            </div>
+          </div>
+
+          {/* Sequential Custom Range */}
+          <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #34495e' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9em', color: '#ecf0f1', fontWeight: '600' }}>
+              🔄 Sequential Custom Range
+            </label>
+            <input
+              type="text"
+              value={customScreenRange}
+              onChange={(e) => setCustomScreenRange(e.target.value)}
+              placeholder="e.g., 1-5 or 1,3,5 or 1-3,7,9-12"
+              disabled={isRunning || config.screens.length === 0}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                borderRadius: '4px',
+                border: '1px solid #34495e',
+                background: 'rgb(60, 60, 60)',
+                color: '#ecf0f1',
+                fontSize: '0.9em',
+                marginTop: '8px',
+                marginBottom: '16px',
+              }}
+            />
+            <div className="button-group">
+              <button
+                onClick={() => handleRunCustomRange(false)}
+                disabled={isRunning || config.screens.length === 0 || !customScreenRange}
+                className="button primary"
+              >
+                🔄 Run Sequential
+              </button>
+              <button
+                onClick={() => handleRunCustomRange(true)}
+                disabled={isRunning || config.screens.length === 0 || !customScreenRange}
+                className="button secondary"
+              >
+                🔍 Debug Sequential
+              </button>
+            </div>
+            <div style={{ fontSize: '0.75em', color: '#95a5a6', marginTop: '8px', lineHeight: '1.5' }}>
+              Runs selected screens <strong>one by one</strong> (slower, more stable)
+            </div>
+          </div>
+
+          {/* Examples */}
+          <div className="run-info" style={{ marginTop: '15px' }}>
+            <strong>Examples:</strong><br/>
+            • <code>1-5</code> - Screens 1 through 5<br/>
+            • <code>1,3,5,7</code> - Screens 1, 3, 5, and 7<br/>
+            • <code>1-3,7,9-12</code> - Screens 1-3, 7, and 9-12<br/>
+            • Total screens: <strong>{config.screens.length}</strong>
           </div>
 
           <div className="run-info" style={{ marginTop: '10px', fontSize: '0.85em', color: '#95a5a6' }}>
